@@ -1,0 +1,48 @@
+{
+  "provider": "INCOIS",
+  "dataset": "incois_hwa",
+  "alerts": [
+    {
+      "alert_id": "HWA-2026-09-04-001",
+      "severity": "severe",
+      "advisory_text": "High wave alert for south Tamil Nadu coast. Waves of 3.0-3.5 m expected. Fishermen advised not to venture into sea.",
+      "valid_from": "2026-09-04T00:00:00Z",
+      "valid_until": "2026-09-04T18:00:00Z",
+      "issued_at": "2026-09-03T23:30:00Z",
+      "area_description": "South Tamil Nadu coast",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.5, 8.0],
+            [78.5, 8.0],
+            [78.5, 9.0],
+            [77.5, 9.0],
+            [77.5, 8.0]
+          ]
+        ]
+      }
+    },
+    {
+      "alert_id": "HWA-2026-09-04-002",
+      "severity": "moderate",
+      "advisory_text": "High wave alert for Kerala coast. Waves of 2.5-3.0 m expected near shore.",
+      "valid_from": "2026-09-04T03:00:00Z",
+      "valid_until": "2026-09-04T21:00:00Z",
+      "issued_at": "2026-09-04T02:00:00Z",
+      "area_description": "Kerala coast",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [75.0, 9.5],
+            [76.5, 9.5],
+            [76.5, 11.0],
+            [75.0, 11.0],
+            [75.0, 9.5]
+          ]
+        ]
+      }
+    }
+  ]
+}

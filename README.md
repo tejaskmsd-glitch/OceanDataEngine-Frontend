@@ -1,0 +1,198 @@
+# Marine Data Layer — Local Platform / Operations
+
+This directory contains the **platform & operations** layer for the Marine
+Intelligence Data Layer: Docker Compose stack, Dockerfiles, database init +
+Alembic migrations, Airflow DAGs, observability (Prometheus / Grafana /
+OpenTelemetry), and bootstrap/fixture tooling.
+
+It stands up the Phase-0 substrate described in `prompt.md` §32 and
+`marine_data_layer_requirements.md`, and is deliberately **AI-agnostic**.
+
+> Backend Python source (`src/marine_data_engine/…`), `pyproject.toml`, and the
+> React `dashboard/` source are owned by other workstreams. This layer builds,
+> runs, migrates, and observes them — it does **not** modify their source.
+
+---
+
+## What the stack runs
+
+| Service | Purpose | Host port |
+|---|---|---|
+| `postgres` | PostgreSQL **+ PostGIS + TimescaleDB** (canonical + time-series) | 5432 |
+| `minio` | S3-compatible object store (raw immutable + processed) | 9000 / 9001 |
+| `minio-init` | one-shot: creates `marine-raw`, `marine-processed`, `marine-artifacts` | — |
+| `redis` | cache / rate-limit / light broker | 6379 |
+| `nats` | **NATS JetStream** work queues + live alert events | 4222 / 8222 |
+| `otel-collector` | OpenTelemetry traces/metrics fan-in | 4317 / 4318 / 8889 |
+| `api` | FastAPI application (query-only) | 8000 |
+| `worker-ingest` | source fetch → raw object store | — |
+| `worker-process` | decode / normalize / QC / derived products (heavy) | — |
+| `worker-alerts` | priority CAP/hazard events (isolated) | — |
+| `airflow-init` | one-shot Airflow DB migrate + admin user | — |
+| `airflow-scheduler` | source DAG scheduling (LocalExecutor) | — |
+| `airflow-webserver` | Airflow UI | 8080 |
+| `prometheus` | metrics scraping | 9090 |
+| `grafana` | dashboards (provisioned) | 3000 |
+| `dashboard` | React ops dashboard (static via nginx) | 5173 |
+
+Every long-running service declares a healthcheck and dependency ordering.
+All image versions are pinned. No secrets are committed.
+
+---
+
+## Prerequisites
+
+- Docker Engine + Docker Compose v2 (`docker compose version`)
+- ~8 GB free RAM recommended (Airflow + Postgres + scientific images)
+
+---
+
+## Quick start (exact commands)
+
+```bash
+# 1. Create your local env file (never committed; edit passwords before sharing)
+make env            # copies .env.example -> .env if absent
+
+# 2. One-command bring-up: build -> up -> wait for DB -> migrate -> seed registry
+make bootstrap
+```
+
+`make bootstrap` prints the URLs when done:
+
+```
+API:        http://localhost:8000        (OpenAPI docs at /docs)
+Dashboard:  http://localhost:5173
+Grafana:    http://localhost:3000        (user/pass from .env)
+Airflow:    http://localhost:8080        (user/pass from .env)
+Prometheus: http://localhost:9090
+MinIO:      http://localhost:9001        (console; user/pass from .env)
+```
+
+### Step-by-step (equivalent to bootstrap)
+
+```bash
+make env                 # .env from .env.example
+make build               # build all images
+make up                  # start the stack (detached)
+make migrate             # apply Alembic canonical schema
+make seed-registry       # seed dataset registry fixtures (verified sources)
+make ps                  # check service/health status
+make logs                # tail logs
+```
+
+### Common operations
+
+```bash
+make down                # stop stack, keep volumes
+make restart             # down + up
+make migrate-down        # roll back one migration
+make validate            # validate compose config
+make validate-dockerfiles# lint Dockerfiles (hadolint if available)
+make nuke                # DESTRUCTIVE: down + delete all volumes
+```
+
+---
+
+## Database migrations (Alembic)
+
+Migrations create the **canonical marine schema** (requirements §7, §17;
+source_mapping §7): dataset registry, processing jobs, `observation` /
+`forecast` (TimescaleDB hypertables), `warning` / `cyclone` / `tsunami_event`,
+`pfz`, `fishery_advisory`, `station`, `zone` (geofence), `bathymetry`,
+`evidence`, and `dataset_freshness`.
+
+- Geometry columns use **SRID 4326 (WGS84)**.
+- Hypertable creation is guarded, so migrations also succeed on a PostGIS-only DB.
+- Migrations are **explicit SQL** and do **not** import backend SQLAlchemy models
+  — they coordinate with the backend by matching the documented canonical fields.
+  If the backend later manages its own metadata, run migrations against the
+  canonical tables only and reconcile ownership before enabling autogenerate.
+
+```bash
+make migrate       # alembic upgrade head
+make migrate-down  # alembic downgrade -1
+```
+
+---
+
+## Object storage
+
+`minio-init` creates the buckets on first boot and enables **versioning on the
+raw bucket** (`marine-raw`) so raw scientific files are not silently overwritten
+(prompt §20 "immutable raw"). Buckets: `marine-raw`, `marine-processed`,
+`marine-artifacts` (overridable via `.env`).
+
+---
+
+## Events (NATS JetStream)
+
+JetStream is enabled (`nats -js`). Logical subjects (documented contract):
+
+- `ingest.*`   — ingest triggers (Airflow → workers)
+- `process.*`  — processing/derived jobs
+- `alert.*`    — normalized alert events (workers → API/dashboard stream)
+- `events.*`   — general domain events
+
+Airflow DAGs publish thin ingest triggers; the dedicated workers do the heavy
+fetch/decode/normalize/QC so no heavy work runs in the orchestrator or in
+synchronous API requests (prompt §4).
+
+---
+
+## Airflow DAGs
+
+| DAG | Schedule | Purpose | Verification |
+|---|---|---|---|
+| `imd_cap_alerts_poll` | every 1 min | Trigger IMD CAP alert ingest | **VERIFIED** (P0) |
+| `incois_erddap_ingest` | every 6 h | Trigger per-dataset ERDDAP ingest (16 IDs) | CATALOG VERIFIED (P0) |
+| `mosdac_search_registry` | every 12 h | Discovery → registry (downloads blocked, AUTH-A) | SEARCH VERIFIED (P0-support) |
+| `dataset_freshness_sweep` | every 5 min | Recompute dataset freshness/staleness | platform |
+
+DAGs are paused at creation (`AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true`);
+unpause in the Airflow UI when the corresponding worker connectors are ready.
+
+---
+
+## Observability
+
+- **Prometheus** scrapes `api`, workers (`:9100/metrics`), `nats`, and the OTel
+  collector. Config: `observability/prometheus/prometheus.yml`.
+- **Grafana** auto-provisions the Prometheus datasource and the
+  *Marine Data Layer — Operations* dashboard.
+- **OpenTelemetry**: services export OTLP to `otel-collector:4317`
+  (`OTEL_EXPORTER_OTLP_ENDPOINT`). The collector re-exports metrics on `:8889`
+  and logs traces locally (swap for Tempo/Jaeger later).
+
+---
+
+## Configuration & secrets
+
+All configuration lives in `.env` (copied from `.env.example`, git-ignored).
+**No real credentials are committed.** Source connector credentials
+(`MOSDAC_*`, `IMD_API_TOKEN`) are intentionally blank locally, which keeps the
+corresponding connectors disabled until verified access is obtained — see
+[`SOURCE_GAPS.md`](./SOURCE_GAPS.md).
+
+INCOIS ERDDAP requires bundling the **GlobalSign intermediate CA**
+(`INCOIS_CA_BUNDLE`); never disable TLS verification (source_mapping V3-TLS).
+
+---
+
+## Validation performed
+
+- `docker compose config` — **passes** (stack resolves).
+- Alembic migration, DAGs, and seed script — **`py_compile` clean**.
+- Prometheus / OTel / Grafana YAML and dashboard/fixture JSON — **parse clean**.
+- Dockerfiles — hadolint reports only style-level warnings (versions are pinned
+  via pinned base images + `pyproject.toml`; `sh -c` CMDs are intentional for
+  runtime env-var expansion).
+
+---
+
+## Source limitations
+
+Live/authenticated source access is **not** fully verified. The PFZ machine
+geometry (INCOIS `PfzAdvisory`) is an **entry-page-only** source pending
+**HAR-A** capture and is a **P0 prerequisite, not a shippable connector**. Full
+details of every source gap and the exact verification action required are in
+[`SOURCE_GAPS.md`](./SOURCE_GAPS.md).

@@ -1,0 +1,59 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "pfz_id": "PFZ-GOA-2026-09-03-01",
+        "region": "Goa",
+        "advisory_text": "Potential fishing zone identified 20 nm off Panaji based on SST and chlorophyll fusion.",
+        "advisory_type": "general",
+        "issue_time": "2026-09-03T04:30:00+00:00",
+        "valid_from": "2026-09-03T00:00:00+00:00",
+        "valid_until": "2026-09-05T00:00:00+00:00",
+        "sst_context": 28.4,
+        "chlorophyll_context": 0.62,
+        "confidence": 0.8
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [73.4, 15.55],
+            [73.6, 15.55],
+            [73.6, 15.35],
+            [73.4, 15.35],
+            [73.4, 15.55]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "pfz_id": "PFZ-KOCHI-2026-09-03-02",
+        "region": "Kochi",
+        "advisory_text": "Potential fishing zone off Kochi.",
+        "advisory_type": "general",
+        "issue_time": "2026-09-03T04:30:00+00:00",
+        "valid_from": "2026-09-03T00:00:00+00:00",
+        "valid_until": "2026-09-05T00:00:00+00:00",
+        "sst_context": 29.1,
+        "chlorophyll_context": 0.51,
+        "confidence": 0.7
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [76.0, 10.05],
+            [76.2, 10.05],
+            [76.2, 9.85],
+            [76.0, 9.85],
+            [76.0, 10.05]
+          ]
+        ]
+      }
+    }
+  ]
+}

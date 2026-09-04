@@ -1,0 +1,23 @@
+{
+  "totalResults": 2,
+  "startIndex": 0,
+  "itemsPerPage": 10,
+  "datasets": [
+    {
+      "datasetId": "3RIMG_L2B_SST",
+      "title": "INSAT-3D Imager Level-2B Sea Surface Temperature",
+      "description": "Sea surface temperature retrieved from INSAT-3D Imager thermal infrared channels.",
+      "product": "L2B_SST",
+      "parameters": ["sea_surface_temperature", "quality_level"],
+      "url": "https://mosdac.gov.in/gallery/index.html?prod=3RIMG_L2B_SST"
+    },
+    {
+      "datasetId": "3RIMG_L1B_STD",
+      "title": "INSAT-3D Imager Level-1B Standard",
+      "description": "Calibrated and geolocated INSAT-3D Imager radiances (standard product).",
+      "product": "L1B_STD",
+      "parameters": ["radiance", "brightness_temperature"],
+      "url": "https://mosdac.gov.in/gallery/index.html?prod=3RIMG_L1B_STD"
+    }
+  ]
+}

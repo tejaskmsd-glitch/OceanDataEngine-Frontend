@@ -1,0 +1,80 @@
+# ---------------------------------------------------------------------------
+# Secrets / local environment (NEVER commit real secrets)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+!intermediate-ca.crt.example
+secrets/
+.secrets/
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.log
+
+# ---------------------------------------------------------------------------
+# Node / dashboard
+# ---------------------------------------------------------------------------
+node_modules/
+dashboard/dist/
+dashboard/.vite/
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# Docker / local stack state (bind-mounted volumes if any)
+# ---------------------------------------------------------------------------
+.data/
+data/
+volumes/
+minio-data/
+pgdata/
+
+# ---------------------------------------------------------------------------
+# Airflow local artifacts
+# ---------------------------------------------------------------------------
+airflow/logs/
+airflow/*.cfg.local
+airflow/airflow.db
+airflow/webserver_config.py
+
+# ---------------------------------------------------------------------------
+# Fixtures / downloaded raw data (large scientific files must not be committed)
+# ---------------------------------------------------------------------------
+fixtures/raw/
+*.h5
+*.hdf
+*.nc
+*.grib2
+*.grb2
+*.bufr
+*.zarr/
+*.parquet
+
+# ---------------------------------------------------------------------------
+# Editor / OS
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

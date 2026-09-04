@@ -1,0 +1,446 @@
+# =============================================================================
+# compose.yaml — Marine Data Layer local/self-hosted stack (Phase 0).
+# -----------------------------------------------------------------------------
+# Services:
+#   postgres      PostgreSQL + PostGIS + TimescaleDB (canonical + timeseries)
+#   minio         S3-compatible object store (raw immutable + processed)
+#   minio-init    one-shot bucket bootstrap (creates marine-raw etc.)
+#   redis         cache / rate-limit / light broker
+#   nats          NATS with JetStream enabled (event queues + live events)
+#   otel-collector OpenTelemetry Collector (traces/metrics fan-in)
+#   api           FastAPI application (query-only, no heavy work inline)
+#   worker-ingest source fetch -> raw object store
+#   worker-process decode / normalize / QC / derived products (heavy)
+#   worker-alerts priority CAP/hazard events (isolated from batch)
+#   airflow-init  one-shot Airflow DB migrate + admin user
+#   airflow-scheduler  DAG scheduling (LocalExecutor)
+#   airflow-webserver  Airflow UI
+#   prometheus    metrics scraping
+#   grafana       dashboards (provisioned datasource + dashboard)
+#   dashboard     React ops dashboard (static via nginx)
+#
+# All long-running services declare healthchecks and dependency ordering.
+# Versions are pinned. No secrets are committed — values come from .env.
+# =============================================================================
+
+x-common-env: &common-env
+  TZ: ${TZ:-UTC}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  DATABASE_URL: ${DATABASE_URL}
+  MDE_DB_URL_OVERRIDE: ${DATABASE_URL}
+  MDE_S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  MDE_S3_ACCESS_KEY: ${S3_ACCESS_KEY_ID}
+  MDE_S3_SECRET_KEY: ${S3_SECRET_ACCESS_KEY}
+  MDE_S3_RAW_BUCKET: ${S3_BUCKET_RAW:-marine-raw}
+  MDE_S3_IN_MEMORY: "false"
+  MDE_NATS_SERVERS: ${NATS_URL}
+  MDE_ENABLE_LIVE_SOURCES: "false"
+  MDE_LOG_JSON: "true"
+  REDIS_URL: ${REDIS_URL}
+  NATS_URL: ${NATS_URL}
+  NATS_JETSTREAM_ENABLED: ${NATS_JETSTREAM_ENABLED:-true}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_BUCKET_RAW: ${S3_BUCKET_RAW:-marine-raw}
+  S3_BUCKET_PROCESSED: ${S3_BUCKET_PROCESSED:-marine-processed}
+  S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-marine-artifacts}
+  OTEL_ENABLED: ${OTEL_ENABLED:-true}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+  OTEL_SERVICE_NAMESPACE: ${OTEL_SERVICE_NAMESPACE:-marine}
+  OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+
+x-restart: &restart-policy
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL + PostGIS + TimescaleDB
+  # timescaledb-ha image bundles both TimescaleDB and PostGIS.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: timescale/timescaledb-ha:pg16.6-ts2.17.2
+    <<: *restart-policy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: ${TZ:-UTC}
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+    volumes:
+      - pgdata:/home/postgres/pgdata/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # MinIO object storage + one-shot bucket bootstrap
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    <<: *restart-policy
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "19000:9000"   # S3 API
+      - "19001:9001"   # console
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-11-21T17-21-54Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET_RAW: ${S3_BUCKET_RAW:-marine-raw}
+      S3_BUCKET_PROCESSED: ${S3_BUCKET_PROCESSED:-marine-processed}
+      S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-marine-artifacts}
+    entrypoint: ["/bin/sh", "/scripts/minio-init.sh"]
+    volumes:
+      - ./docker/minio/minio-init.sh:/scripts/minio-init.sh:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4.1-bookworm
+    <<: *restart-policy
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # NATS with JetStream enabled (-js) for durable work queues + live events
+  # ---------------------------------------------------------------------------
+  nats:
+    image: nats:2.10.24-alpine
+    <<: *restart-policy
+    command: ["-js", "-m", "8222", "-sd", "/data"]
+    volumes:
+      - natsdata:/data
+    ports:
+      - "14222:4222"   # client
+      - "18222:8222"   # monitoring / health
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8222/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    <<: *restart-policy
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./observability/otel/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "14317:4317"   # OTLP gRPC
+      - "14318:4318"   # OTLP HTTP
+      - "18889:8889"   # Prometheus exporter (collector metrics)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:13133/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # FastAPI application
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    <<: *restart-policy
+    environment:
+      <<: *common-env
+      API_HOST: ${API_HOST:-0.0.0.0}
+      API_PORT: ${API_PORT:-8000}
+      API_WORKERS: ${API_WORKERS:-2}
+      API_APP_MODULE: ${API_APP_MODULE:-marine_data_engine.api.app:app}
+      OTEL_SERVICE_NAME: marine-api
+    volumes:
+      - ./src:/app/src:ro
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ---------------------------------------------------------------------------
+  # Workers — separated roles / queues, independently scalable
+  # ---------------------------------------------------------------------------
+  worker-ingest:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    <<: *restart-policy
+    environment:
+      <<: *common-env
+      WORKER_ROLE: ingest
+      WORKER_CONCURRENCY: ${WORKER_INGEST_CONCURRENCY:-2}
+      WORKER_RETRY_MAX: ${WORKER_RETRY_MAX:-5}
+      WORKER_RETRY_BACKOFF_BASE_SECONDS: ${WORKER_RETRY_BACKOFF_BASE_SECONDS:-2}
+      WORKER_RETRY_BACKOFF_JITTER_SECONDS: ${WORKER_RETRY_BACKOFF_JITTER_SECONDS:-1}
+      OTEL_SERVICE_NAME: marine-worker-ingest
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  worker-process:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    <<: *restart-policy
+    environment:
+      <<: *common-env
+      WORKER_ROLE: process
+      WORKER_CONCURRENCY: ${WORKER_PROCESS_CONCURRENCY:-2}
+      WORKER_RETRY_MAX: ${WORKER_RETRY_MAX:-5}
+      WORKER_RETRY_BACKOFF_BASE_SECONDS: ${WORKER_RETRY_BACKOFF_BASE_SECONDS:-2}
+      WORKER_RETRY_BACKOFF_JITTER_SECONDS: ${WORKER_RETRY_BACKOFF_JITTER_SECONDS:-1}
+      OTEL_SERVICE_NAME: marine-worker-process
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  worker-alerts:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    <<: *restart-policy
+    environment:
+      <<: *common-env
+      WORKER_ROLE: alerts
+      WORKER_CONCURRENCY: ${WORKER_ALERTS_CONCURRENCY:-1}
+      WORKER_RETRY_MAX: ${WORKER_RETRY_MAX:-5}
+      WORKER_RETRY_BACKOFF_BASE_SECONDS: ${WORKER_RETRY_BACKOFF_BASE_SECONDS:-2}
+      WORKER_RETRY_BACKOFF_JITTER_SECONDS: ${WORKER_RETRY_BACKOFF_JITTER_SECONDS:-1}
+      OTEL_SERVICE_NAME: marine-worker-alerts
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Airflow (LocalExecutor: init one-shot, scheduler, webserver)
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate && \
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --firstname Admin --lastname User --role Admin \
+          --email admin@example.com || true
+    environment: &airflow-env
+      <<: *common-env
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-false}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-true}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: ${AIRFLOW__WEBSERVER__EXPOSE_CONFIG:-false}
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      # Config surfaced to DAGs for handing work to the stack.
+      MARINE_NATS_URL: ${NATS_URL}
+      MARINE_API_BASE_URL: http://api:8000
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./airflow/config/airflow_local_settings.py:/opt/airflow/config/airflow_local_settings.py:ro
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    <<: *restart-policy
+    command: ["scheduler"]
+    environment: *airflow-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./airflow/config/airflow_local_settings.py:/opt/airflow/config/airflow_local_settings.py:ro
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$(hostname)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    <<: *restart-policy
+    command: ["webserver"]
+    environment: *airflow-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./airflow/config/airflow_local_settings.py:/opt/airflow/config/airflow_local_settings.py:ro
+      - airflow-logs:/opt/airflow/logs
+    ports:
+      - "${AIRFLOW_WEB_PORT:-8080}:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Prometheus + Grafana
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    <<: *restart-policy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "19090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    <<: *restart-policy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "13000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # React ops dashboard (static bundle via nginx)
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/dashboard.Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-ws://localhost:8000}
+    <<: *restart-policy
+    ports:
+      - "${DASHBOARD_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  pgdata:
+  miniodata:
+  redisdata:
+  natsdata:
+  promdata:
+  grafanadata:
+  airflow-logs:

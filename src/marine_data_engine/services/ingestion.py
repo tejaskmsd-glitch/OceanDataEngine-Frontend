@@ -1,0 +1,627 @@
+"""Ingestion service.
+
+Turns adapter :class:`FetchResult` output into canonical ORM rows with:
+- immutable raw storage of the source bytes,
+- idempotent upserts (duplicate upstream items are skipped),
+- QC evaluation and a :class:`DataQualityRecord` audit row per entity,
+- distinct provenance/timestamps/version fields,
+- ingestion + processing job/run lineage,
+- alert lifecycle events published to the queue.
+
+Rejected records are still stored as QC audit rows (never silently dropped);
+their canonical row is written with the QC disposition so downstream queries
+can filter by ``quality_status``.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..db.enums import JobStatus, QCStatus, QueuePriority, Severity
+from ..db.models import (
+    PFZ,
+    Alert,
+    DataQualityRecord,
+    Dataset,
+    DatasetAsset,
+    Evidence,  # noqa: F401  (referenced by evidence service; import cohesion)
+    Forecast,
+    IngestionJob,
+    Observation,
+    ProcessingJob,
+    ProcessingRun,
+)
+from ..domain.events import (
+    alert_created,
+    dataset_updated,
+    observation_ingested,
+    pfz_updated,
+    processing_completed,
+    processing_failed,
+)
+from ..domain.geo import geometry_bbox, geometry_centroid
+from ..domain.idempotency import make_idempotency_key
+from ..domain.qc import qc_geometry_record, qc_observation
+from ..messaging.queue import InMemoryQueue
+from ..metrics import RECORDS_PROCESSED_TOTAL, SOURCE_FETCH_TOTAL
+from ..sources.base import FetchResult, ParsedAlert, ParsedForecast, ParsedObservation, ParsedPFZ
+from ..storage.raw_store import RawStore
+
+PROCESSING_VERSION = "1.0.0"
+
+# Event subjects (payload only; WS layer subscribes to alert events).
+_CRITICAL_EVENTS = {"cyclone", "tsunami", "storm_surge"}
+
+
+@dataclass
+class IngestSummary:
+    """Outcome of an ingestion run."""
+
+    dataset_key: str
+    raw_uri: str
+    accepted: int = 0
+    rejected: int = 0
+    quarantined: int = 0
+    skipped_duplicates: int = 0
+    alert_events: list[dict] = None  # type: ignore[assignment]
+    pfz_events: list[dict] = None  # type: ignore[assignment]
+    observation_events: list[dict] = None  # type: ignore[assignment]
+    processing_events: list[dict] = None  # type: ignore[assignment]
+    dataset_events: list[dict] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.alert_events is None:
+            self.alert_events = []
+        if self.pfz_events is None:
+            self.pfz_events = []
+        if self.observation_events is None:
+            self.observation_events = []
+        if self.processing_events is None:
+            self.processing_events = []
+        if self.dataset_events is None:
+            self.dataset_events = []
+
+
+def _now() -> datetime:
+    return datetime.now(tz=UTC)
+
+
+def _severity_priority(event_type: str, severity: str) -> QueuePriority:
+    if event_type in _CRITICAL_EVENTS or severity in {
+        Severity.SEVERE.value,
+        Severity.EXTREME.value,
+    }:
+        return QueuePriority.CRITICAL_ALERTS
+    return QueuePriority.NORMAL_INGESTION
+
+
+class IngestionService:
+    """Persist adapter output into the canonical model with QC + lineage."""
+
+    def __init__(
+        self,
+        session: Session,
+        raw_store: RawStore,
+        queue: InMemoryQueue | None = None,
+        alert_callback: Callable[[dict], None] | None = None,
+    ) -> None:
+        self.session = session
+        self.raw_store = raw_store
+        self.queue = queue
+        # Optional sink invoked for each non-rejected alert event so producers
+        # outside the request cycle (e.g. the WebSocket AlertBroker) can receive
+        # live alerts. Kept sync so IngestionService itself stays sync.
+        self.alert_callback = alert_callback
+
+    # ------------------------------------------------------------------ #
+    def ingest(self, result: FetchResult) -> IngestSummary:
+        raw = result.raw
+        stored = self.raw_store.put(
+            provider=raw.provider,
+            dataset=raw.dataset,
+            data=raw.data,
+            ext=raw.ext,
+            media_type=raw.media_type,
+            when=raw.retrieved_at,
+        )
+        SOURCE_FETCH_TOTAL.labels(raw.provider, raw.dataset, "success").inc()
+
+        dataset = self._ensure_dataset(raw.provider, raw.dataset)
+
+        ingestion_job = IngestionJob(
+            job_uid=uuid.uuid4().hex,
+            dataset_key=dataset.key,
+            priority=QueuePriority.NORMAL_INGESTION.value,
+            status=JobStatus.RUNNING.value,
+            idempotency_key=stored.checksum_sha256,
+            started_at=_now(),
+            bytes_fetched=stored.size_bytes,
+        )
+        self.session.add(ingestion_job)
+        self.session.flush()
+
+        self.session.add(
+            DatasetAsset(
+                dataset_id=dataset.id,
+                role="raw",
+                storage_uri=stored.uri,
+                media_type=stored.media_type,
+                checksum_sha256=stored.checksum_sha256,
+                size_bytes=stored.size_bytes,
+                ingestion_job_id=ingestion_job.id,
+                retrieved_at=stored.retrieved_at,
+            )
+        )
+
+        proc_job = ProcessingJob(
+            job_uid=uuid.uuid4().hex,
+            dataset_key=dataset.key,
+            job_type=f"normalize_{raw.dataset}",
+            priority=QueuePriority.NORMAL_INGESTION.value,
+            status=JobStatus.RUNNING.value,
+            idempotency_key=stored.checksum_sha256,
+            ingestion_job_id=ingestion_job.id,
+            started_at=_now(),
+        )
+        self.session.add(proc_job)
+        self.session.flush()
+
+        run = ProcessingRun(
+            run_uid=uuid.uuid4().hex,
+            processing_job_id=proc_job.id,
+            attempt=1,
+            status=JobStatus.RUNNING.value,
+            worker="ingestion-service",
+            started_at=_now(),
+        )
+        self.session.add(run)
+        self.session.flush()
+
+        summary = IngestSummary(dataset_key=dataset.key, raw_uri=stored.uri)
+
+        try:
+            for alert in result.alerts:
+                self._ingest_alert(alert, raw, run, summary)
+            for pfz in result.pfz:
+                self._ingest_pfz(pfz, raw, run, summary)
+            for obs in result.observations:
+                self._ingest_observation(obs, raw, run, summary)
+            for forecast in result.forecasts:
+                self._ingest_forecast(forecast, raw, run, summary)
+        except Exception as exc:  # noqa: BLE001
+            # Mark lineage failed and emit a processing.failed event before
+            # re-raising so callers still observe the error.
+            run.status = JobStatus.FAILED.value
+            run.finished_at = _now()
+            run.duration_ms = int(
+                (run.finished_at - run.started_at).total_seconds() * 1000
+            )
+            proc_job.status = JobStatus.FAILED.value
+            proc_job.finished_at = _now()
+            ingestion_job.status = JobStatus.FAILED.value
+            ingestion_job.finished_at = _now()
+
+            prev_status = dataset.status
+            dataset.last_failure_at = _now()
+            dataset.consecutive_failures = (dataset.consecutive_failures or 0) + 1
+            dataset.status = "failed"
+
+            fail_event = processing_failed(
+                job_uid=proc_job.job_uid,
+                dataset_key=dataset.key,
+                error=str(exc),
+            )
+            summary.processing_events.append(fail_event)
+            if self.queue is not None:
+                self.queue.publish(
+                    priority=QueuePriority.NORMAL_INGESTION,
+                    payload=fail_event,
+                    idempotency_key=f"event:{proc_job.job_uid}:failed",
+                )
+            self._emit_dataset_updated(dataset, prev_status, summary)
+            self.session.flush()
+            raise
+
+        run.records_in = summary.accepted + summary.rejected + summary.quarantined
+        run.records_accepted = summary.accepted
+        run.records_rejected = summary.rejected
+        run.records_quarantined = summary.quarantined
+        run.status = JobStatus.SUCCEEDED.value
+        run.finished_at = _now()
+        run.duration_ms = int((run.finished_at - run.started_at).total_seconds() * 1000)
+
+        proc_job.status = JobStatus.SUCCEEDED.value
+        proc_job.finished_at = _now()
+        ingestion_job.status = JobStatus.SUCCEEDED.value
+        ingestion_job.finished_at = _now()
+
+        prev_status = dataset.status
+        dataset.last_success_at = _now()
+        dataset.last_processed_at = _now()
+        dataset.consecutive_failures = 0
+        dataset.status = "healthy"
+
+        # processing.completed event.
+        completed_event = processing_completed(
+            job_uid=proc_job.job_uid,
+            dataset_key=dataset.key,
+            records_accepted=summary.accepted,
+            records_rejected=summary.rejected,
+            duration_ms=run.duration_ms,
+        )
+        summary.processing_events.append(completed_event)
+        if self.queue is not None:
+            self.queue.publish(
+                priority=QueuePriority.NORMAL_INGESTION,
+                payload=completed_event,
+                idempotency_key=f"event:{proc_job.job_uid}:completed",
+            )
+
+        # dataset.updated event when the status changed.
+        self._emit_dataset_updated(dataset, prev_status, summary)
+
+        self.session.flush()
+        return summary
+
+    def _emit_dataset_updated(
+        self, dataset: Dataset, prev_status: str | None, summary: IngestSummary
+    ) -> None:
+        """Emit a dataset.updated event when the dataset status changed."""
+        if dataset.status == prev_status:
+            return
+        event = dataset_updated(
+            dataset_key=dataset.key,
+            status=dataset.status,
+            last_success_at=dataset.last_success_at,
+        )
+        summary.dataset_events.append(event)
+        if self.queue is not None:
+            self.queue.publish(
+                priority=QueuePriority.NORMAL_INGESTION,
+                payload=event,
+                idempotency_key=f"event:dataset:{dataset.key}:{dataset.status}:"
+                f"{dataset.last_processed_at}",
+            )
+
+    # ------------------------------------------------------------------ #
+    def _ensure_dataset(self, provider: str, dataset_key: str) -> Dataset:
+        ds = self.session.execute(
+            select(Dataset).where(Dataset.key == dataset_key)
+        ).scalar_one_or_none()
+        if ds is not None:
+            return ds
+        from .registry import ensure_source
+
+        source = ensure_source(self.session, provider)
+        ds = Dataset(
+            key=dataset_key,
+            source_id=source.id,
+            product=dataset_key,
+            parameters=[],
+            expected_update_interval_s=6 * 3600,
+            priority=QueuePriority.NORMAL_INGESTION.value,
+            status="healthy",
+        )
+        self.session.add(ds)
+        self.session.flush()
+        return ds
+
+    def _exists(self, model, idempotency_key: str) -> bool:
+        return (
+            self.session.execute(
+                select(model.id).where(model.idempotency_key == idempotency_key)
+            ).first()
+            is not None
+        )
+
+    def _record_quality(
+        self, entity_type: str, idem: str, dataset_key: str, qc, run: ProcessingRun
+    ) -> None:
+        self.session.add(
+            DataQualityRecord(
+                entity_type=entity_type,
+                entity_idempotency_key=idem,
+                dataset_key=dataset_key,
+                quality_status=qc.status.value,
+                quality_score=qc.score,
+                checks=[c.as_dict() for c in qc.checks],
+                reason=qc.reason,
+                processing_version=PROCESSING_VERSION,
+                processing_run_id=run.id,
+            )
+        )
+        RECORDS_PROCESSED_TOTAL.labels(dataset_key, qc.status.value).inc()
+
+    def _tally(self, summary: IngestSummary, qc) -> None:
+        if qc.status == QCStatus.ACCEPTED:
+            summary.accepted += 1
+        elif qc.status == QCStatus.REJECTED:
+            summary.rejected += 1
+        else:
+            summary.quarantined += 1
+
+    # ------------------------------------------------------------------ #
+    def _ingest_alert(
+        self, alert: ParsedAlert, raw, run: ProcessingRun, summary: IngestSummary
+    ) -> None:
+        idem = make_idempotency_key(
+            alert.provider, alert.source_dataset, alert.alert_uid, alert.issued_at
+        )
+        if self._exists(Alert, idem):
+            summary.skipped_duplicates += 1
+            return
+
+        qc = qc_geometry_record(
+            geometry=alert.geometry,
+            valid_from=alert.effective_from,
+            valid_until=alert.valid_until,
+        )
+
+        bbox = (None, None, None, None)
+        if alert.geometry is not None:
+            try:
+                bbox = geometry_bbox(alert.geometry)
+            except Exception:  # noqa: BLE001
+                bbox = (None, None, None, None)
+
+        row = Alert(
+            alert_uid=alert.alert_uid,
+            event_type=alert.event_type,
+            severity=alert.severity,
+            certainty=alert.certainty,
+            urgency=alert.urgency,
+            headline=alert.headline,
+            description=alert.description,
+            area_description=alert.area_description,
+            geometry=alert.geometry,
+            bbox_minx=bbox[0],
+            bbox_miny=bbox[1],
+            bbox_maxx=bbox[2],
+            bbox_maxy=bbox[3],
+            provider=alert.provider,
+            source_dataset=alert.source_dataset,
+            source_url=alert.source_url,
+            processing_version=PROCESSING_VERSION,
+            issued_at=alert.issued_at,
+            valid_from=alert.effective_from,
+            valid_until=alert.valid_until,
+            retrieved_at=raw.retrieved_at,
+            processed_at=_now(),
+            quality_status=qc.status.value,
+            quality_score=qc.score,
+            missing_flag=qc.missing_flag,
+            outlier_flag=qc.outlier_flag,
+            interpolated_flag=qc.interpolated_flag,
+            idempotency_key=idem,
+        )
+        self.session.add(row)
+        self._record_quality("alert", idem, raw.dataset, qc, run)
+        self._tally(summary, qc)
+
+        # Publish alert lifecycle event on the priority-isolated queue.
+        if qc.status != QCStatus.REJECTED:
+            priority = _severity_priority(alert.event_type, alert.severity)
+            event = alert_created(
+                alert_uid=alert.alert_uid,
+                event_type=alert.event_type,
+                severity=alert.severity,
+                headline=alert.headline,
+                issued_at=alert.issued_at,
+            )
+            summary.alert_events.append(event)
+            if self.queue is not None:
+                self.queue.publish(
+                    priority=priority,
+                    payload=event,
+                    idempotency_key=f"event:{idem}",
+                )
+            # Feed any external sink (e.g. WebSocket AlertBroker). Failures in
+            # the callback must never break ingestion.
+            if self.alert_callback is not None:
+                try:
+                    self.alert_callback(event)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _ingest_pfz(
+        self, pfz: ParsedPFZ, raw, run: ProcessingRun, summary: IngestSummary
+    ) -> None:
+        idem = make_idempotency_key(
+            pfz.provider, pfz.source_dataset, pfz.pfz_uid, pfz.issue_time
+        )
+        if self._exists(PFZ, idem):
+            summary.skipped_duplicates += 1
+            return
+
+        qc = qc_geometry_record(
+            geometry=pfz.geometry, valid_from=pfz.valid_from, valid_until=pfz.valid_until
+        )
+
+        centroid = (None, None)
+        if pfz.geometry is not None:
+            try:
+                centroid = geometry_centroid(pfz.geometry)
+            except Exception:  # noqa: BLE001
+                centroid = (None, None)
+
+        row = PFZ(
+            pfz_uid=pfz.pfz_uid,
+            region=pfz.region,
+            advisory_text=pfz.advisory_text,
+            advisory_type=pfz.advisory_type,
+            sst_context=pfz.sst_context,
+            chlorophyll_context=pfz.chlorophyll_context,
+            confidence=pfz.confidence,
+            geometry=pfz.geometry,
+            centroid_lat=centroid[0],
+            centroid_lon=centroid[1],
+            provider=pfz.provider,
+            source_dataset=pfz.source_dataset,
+            source_url=pfz.source_url,
+            processing_version=PROCESSING_VERSION,
+            issued_at=pfz.issue_time,
+            valid_from=pfz.valid_from,
+            valid_until=pfz.valid_until,
+            retrieved_at=raw.retrieved_at,
+            processed_at=_now(),
+            quality_status=qc.status.value,
+            quality_score=qc.score,
+            missing_flag=qc.missing_flag,
+            outlier_flag=qc.outlier_flag,
+            interpolated_flag=qc.interpolated_flag,
+            idempotency_key=idem,
+        )
+        self.session.add(row)
+        self._record_quality("pfz", idem, raw.dataset, qc, run)
+        self._tally(summary, qc)
+
+        # Publish a pfz.updated lifecycle event for accepted/quarantined PFZ
+        # geometry (rejected records are not broadcast).
+        if qc.status != QCStatus.REJECTED:
+            event = pfz_updated(
+                pfz_uid=pfz.pfz_uid,
+                region=pfz.region,
+                valid_from=pfz.valid_from,
+                valid_until=pfz.valid_until,
+            )
+            summary.pfz_events.append(event)
+            if self.queue is not None:
+                self.queue.publish(
+                    priority=QueuePriority.NORMAL_INGESTION,
+                    payload=event,
+                    idempotency_key=f"event:pfz:{idem}",
+                )
+
+    def _ingest_observation(
+        self,
+        obs: ParsedObservation,
+        raw,
+        run: ProcessingRun,
+        summary: IngestSummary,
+    ) -> None:
+        """Map a :class:`ParsedObservation` -> ``Observation`` ORM row with QC."""
+        idem = make_idempotency_key(
+            obs.provider,
+            obs.source_dataset,
+            obs.station_id,
+            obs.parameter,
+            obs.observed_at,
+        )
+        if self._exists(Observation, idem):
+            summary.skipped_duplicates += 1
+            return
+
+        qc = qc_observation(
+            parameter=obs.parameter,
+            value=obs.value,
+            latitude=obs.latitude,
+            longitude=obs.longitude,
+            observed_at=obs.observed_at,
+        )
+
+        row = Observation(
+            station_id=obs.station_id,
+            station_type=obs.station_type,
+            latitude=obs.latitude,
+            longitude=obs.longitude,
+            parameter=obs.parameter,
+            value=obs.value,
+            unit=obs.unit,
+            provider=obs.provider,
+            source_dataset=obs.source_dataset,
+            source_url=None,
+            processing_version=PROCESSING_VERSION,
+            observed_at=obs.observed_at,
+            retrieved_at=raw.retrieved_at,
+            processed_at=_now(),
+            quality_status=qc.status.value,
+            quality_score=qc.score,
+            missing_flag=qc.missing_flag,
+            outlier_flag=qc.outlier_flag,
+            interpolated_flag=qc.interpolated_flag,
+            idempotency_key=idem,
+        )
+        self.session.add(row)
+        self._record_quality("observation", idem, raw.dataset, qc, run)
+        self._tally(summary, qc)
+
+        # Publish an observation.ingested event for non-rejected records.
+        if qc.status != QCStatus.REJECTED:
+            event = observation_ingested(
+                station_id=obs.station_id,
+                parameter=obs.parameter,
+                value=obs.value,
+                unit=obs.unit,
+                observed_at=obs.observed_at,
+            )
+            summary.observation_events.append(event)
+            if self.queue is not None:
+                self.queue.publish(
+                    priority=QueuePriority.NORMAL_INGESTION,
+                    payload=event,
+                    idempotency_key=f"event:obs:{idem}",
+                )
+
+    def _ingest_forecast(
+        self,
+        forecast: ParsedForecast,
+        raw,
+        run: ProcessingRun,
+        summary: IngestSummary,
+    ) -> None:
+        """Map a :class:`ParsedForecast` -> ``Forecast`` ORM row with QC."""
+        idem = make_idempotency_key(
+            forecast.provider,
+            forecast.source_dataset,
+            forecast.model_name or "",
+            forecast.parameter,
+            forecast.latitude,
+            forecast.longitude,
+            forecast.valid_from,
+        )
+        if self._exists(Forecast, idem):
+            summary.skipped_duplicates += 1
+            return
+
+        qc = qc_observation(
+            parameter=forecast.parameter,
+            value=forecast.value,
+            latitude=forecast.latitude,
+            longitude=forecast.longitude,
+            observed_at=forecast.valid_from,
+        )
+
+        row = Forecast(
+            model_name=forecast.model_name,
+            model_cycle=forecast.model_cycle,
+            forecast_hour=forecast.forecast_hour,
+            latitude=forecast.latitude,
+            longitude=forecast.longitude,
+            parameter=forecast.parameter,
+            value=forecast.value,
+            unit=forecast.unit,
+            resolution=forecast.resolution,
+            provider=forecast.provider,
+            source_dataset=forecast.source_dataset,
+            source_url=None,
+            processing_version=PROCESSING_VERSION,
+            valid_from=forecast.valid_from,
+            forecast_time=forecast.forecast_time,
+            retrieved_at=raw.retrieved_at,
+            processed_at=_now(),
+            quality_status=qc.status.value,
+            quality_score=qc.score,
+            missing_flag=qc.missing_flag,
+            outlier_flag=qc.outlier_flag,
+            interpolated_flag=qc.interpolated_flag,
+            idempotency_key=idem,
+        )
+        self.session.add(row)
+        self._record_quality("forecast", idem, raw.dataset, qc, run)
+        self._tally(summary, qc)

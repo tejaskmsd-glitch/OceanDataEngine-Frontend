@@ -1,0 +1,13 @@
+# Grafana dashboard provisioning — loads JSON dashboards from disk.
+apiVersion: 1
+providers:
+  - name: marine
+    orgId: 1
+    folder: Marine Data Layer
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

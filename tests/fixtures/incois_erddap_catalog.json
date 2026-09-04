@@ -1,0 +1,101 @@
+{
+  "table": {
+    "columnNames": [
+      "griddap",
+      "Subset",
+      "tabledap",
+      "Make A Graph",
+      "wms",
+      "files",
+      "Title",
+      "Summary",
+      "FGDC",
+      "ISO 19115",
+      "Info",
+      "Background Info",
+      "RSS",
+      "Email",
+      "Institution",
+      "Dataset ID"
+    ],
+    "columnTypes": [
+      "String", "String", "String", "String", "String", "String", "String",
+      "String", "String", "String", "String", "String", "String", "String",
+      "String", "String"
+    ],
+    "rows": [
+      [
+        "https://erddap.incois.gov.in/erddap/griddap/SST_Daily.graph",
+        "",
+        "",
+        "https://erddap.incois.gov.in/erddap/griddap/SST_Daily.graph",
+        "https://erddap.incois.gov.in/erddap/wms/SST_Daily/request",
+        "",
+        "INCOIS Daily Sea Surface Temperature",
+        "Gridded daily SST product for the Indian Ocean region.",
+        "",
+        "",
+        "https://erddap.incois.gov.in/erddap/info/SST_Daily/index.json",
+        "https://incois.gov.in/",
+        "",
+        "",
+        "INCOIS",
+        "SST_Daily"
+      ],
+      [
+        "https://erddap.incois.gov.in/erddap/griddap/SSH_Daily.graph",
+        "",
+        "",
+        "https://erddap.incois.gov.in/erddap/griddap/SSH_Daily.graph",
+        "",
+        "",
+        "INCOIS Daily Sea Surface Height",
+        "Gridded daily sea surface height anomaly.",
+        "",
+        "",
+        "https://erddap.incois.gov.in/erddap/info/SSH_Daily/index.json",
+        "https://incois.gov.in/",
+        "",
+        "",
+        "INCOIS",
+        "SSH_Daily"
+      ],
+      [
+        "",
+        "https://erddap.incois.gov.in/erddap/tabledap/Argo_Profiles.subset",
+        "https://erddap.incois.gov.in/erddap/tabledap/Argo_Profiles",
+        "https://erddap.incois.gov.in/erddap/tabledap/Argo_Profiles.graph",
+        "",
+        "",
+        "INCOIS Argo Float Profiles",
+        "In-situ temperature/salinity profiles from Argo floats.",
+        "",
+        "",
+        "https://erddap.incois.gov.in/erddap/info/Argo_Profiles/index.json",
+        "https://incois.gov.in/",
+        "",
+        "",
+        "INCOIS",
+        "Argo_Profiles"
+      ],
+      [
+        "https://erddap.incois.gov.in/erddap/griddap/Waves_Forecast.graph",
+        "",
+        "",
+        "https://erddap.incois.gov.in/erddap/griddap/Waves_Forecast.graph",
+        "",
+        "",
+        "INCOIS Wave Height Forecast",
+        "Significant wave height forecast for Indian coastal waters.",
+        "",
+        "",
+        "https://erddap.incois.gov.in/erddap/info/Waves_Forecast/index.json",
+        "https://incois.gov.in/",
+        "",
+        "",
+        "INCOIS",
+        "Waves_Forecast"
+      ]
+    ]
+  }
+}

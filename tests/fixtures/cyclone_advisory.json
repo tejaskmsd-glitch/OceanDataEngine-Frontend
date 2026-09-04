@@ -1,0 +1,22 @@
+{
+  "cyclone_id": "BOB-04-2026",
+  "name": "Cyclone Vayu",
+  "issue_time": "2026-09-03T09:00:00Z",
+  "center": {
+    "latitude": 15.4,
+    "longitude": 87.2
+  },
+  "movement": {
+    "direction_deg": 315.0,
+    "speed_kmph": 18.0
+  },
+  "central_pressure_hpa": 982.0,
+  "max_sustained_wind_kmph": 120.0,
+  "intensity_category": "Severe Cyclonic Storm",
+  "track": [
+    [87.2, 15.4],
+    [86.6, 16.1],
+    [85.9, 16.9],
+    [85.1, 17.8]
+  ]
+}

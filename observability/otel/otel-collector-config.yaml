@@ -1,0 +1,55 @@
+# =============================================================================
+# otel-collector-config.yaml — OpenTelemetry Collector (contrib) pipeline.
+# Receives OTLP traces/metrics/logs from API + workers (OTEL_EXPORTER_OTLP_
+# ENDPOINT) and exposes collector/pipeline metrics for Prometheus to scrape.
+# Traces are logged locally (debug exporter) — swap for Tempo/Jaeger later.
+# =============================================================================
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+exporters:
+  # Collector/pipeline metrics scraped by Prometheus (job: otel-collector).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+  # Local visibility for traces/logs during development.
+  debug:
+    verbosity: normal
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+  telemetry:
+    logs:
+      level: info

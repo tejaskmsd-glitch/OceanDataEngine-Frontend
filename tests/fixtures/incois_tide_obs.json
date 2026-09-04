@@ -1,0 +1,30 @@
+{
+  "provider": "INCOIS",
+  "dataset": "incois_tide",
+  "observations": [
+    {
+      "station_id": "TG_VISAKHAPATNAM",
+      "station_name": "Visakhapatnam",
+      "latitude": 17.6868,
+      "longitude": 83.2185,
+      "water_level_m": 1.42,
+      "observation_time": "2026-09-04T01:00:00Z"
+    },
+    {
+      "station_id": "TG_CHENNAI",
+      "station_name": "Chennai",
+      "latitude": 13.0827,
+      "longitude": 80.2707,
+      "water_level_m": 0.87,
+      "observation_time": "2026-09-04T01:00:00Z"
+    },
+    {
+      "station_id": "TG_KOCHI",
+      "station_name": "Kochi",
+      "latitude": 9.9312,
+      "longitude": 76.2673,
+      "water_level_m": 0.63,
+      "observation_time": "2026-09-04T01:00:00Z"
+    }
+  ]
+}

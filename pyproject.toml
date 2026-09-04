@@ -1,0 +1,70 @@
+[project]
+name = "marine-data-engine"
+version = "0.1.0"
+description = "Source-agnostic Marine Data Layer backend (ingestion, canonical model, query-only API)."
+readme = "backend/README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "Marine Data Layer Team" }]
+
+# Runtime dependencies are pinned to compatible-release ranges to keep the
+# build reproducible while allowing patch-level security fixes.
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    # C-extension / core packages use lower-bounded ranges so wheels resolve on
+    # the local interpreter (Python 3.14 ships only recent cp314 wheels for
+    # these). Pins are tightened per deployment target.
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "sqlalchemy>=2.0.30,<2.1",
+    "geoalchemy2>=0.15,<0.18",
+    "psycopg[binary]>=3.2.10,<3.4",
+    "shapely>=2.0.6,<2.2",
+    "nats-py==2.9.0",
+    "structlog==24.4.0",
+    "prometheus-client==0.21.1",
+    "python-dateutil==2.9.0.post0",
+]
+
+[project.optional-dependencies]
+# Object storage (MinIO / S3). Kept optional so the API/tests can run without it.
+storage = ["boto3==1.35.90"]
+# Test + lint tooling.
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+    "httpx==0.28.1",
+    "ruff==0.8.4",
+]
+
+[project.scripts]
+marine-worker = "marine_data_engine.worker.runtime:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra -q --timeout=30 -m 'not real_source'"
+markers = [
+    "real_source: tests that make real HTTP requests to external sources",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["B008"]  # FastAPI Depends() in defaults is idiomatic.
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

@@ -1,0 +1,17 @@
+{
+  "event_id": "TSU-INCOIS-2026-0912",
+  "earthquake_time": "2026-09-03T04:22:10Z",
+  "earthquake": {
+    "latitude": -6.5,
+    "longitude": 95.3,
+    "magnitude": 7.8,
+    "depth_km": 25.0
+  },
+  "tsunami_status": "WATCH",
+  "alert_level": "Warning",
+  "affected_regions": [
+    "Andaman & Nicobar Islands",
+    "Tamil Nadu Coast",
+    "Andhra Pradesh Coast"
+  ]
+}
