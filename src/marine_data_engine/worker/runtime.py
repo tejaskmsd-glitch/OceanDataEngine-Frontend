@@ -149,11 +149,35 @@ def main() -> None:  # pragma: no cover - entrypoint
     configure_logging(s.service.log_level, s.service.log_json)
 
     handlers = default_handlers()
+
+    # C2 fix: filter handlers by WORKER_ROLE when set.
+    worker_role = os.environ.get("WORKER_ROLE", "").strip().lower()
+    if worker_role:
+        role_handler_map = {
+            "alerts": {"alert.created", "alert.updated", "alert.expired"},
+            "ingest": {"dataset.updated", "processing.started", "processing.completed", "processing.failed"},
+            "process": {"pfz.updated", "dataset.updated", "processing.started", "processing.completed", "processing.failed"},
+        }
+        allowed = role_handler_map.get(worker_role)
+        if allowed is not None:
+            handlers = {k: v for k, v in handlers.items() if k in allowed}
+            log.info("worker_role_filter", role=worker_role, handler_count=len(handlers))
+
+    # H7 fix: start Prometheus metrics HTTP server.
+    try:
+        from prometheus_client import start_http_server
+        from ..metrics import REGISTRY
+        start_http_server(9100, registry=REGISTRY)
+        log.info("metrics_server_started", port=9100)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("metrics_server_failed", error=str(exc))
+
     nats_url = os.environ.get("NATS_URL") or s.messaging.servers
 
     backend = "in_memory"
     jetstream: JetStreamQueue | None = None
-    if os.environ.get("NATS_URL"):
+    # H18 fix: use nats_url (from env or config) not just os.environ.
+    if nats_url:
         jetstream = JetStreamQueue(
             servers=nats_url,
             stream_prefix=s.messaging.stream_prefix,

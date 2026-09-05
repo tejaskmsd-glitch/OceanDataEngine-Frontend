@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from ..db.enums import QueuePriority
-from .subjects import PRIORITY_RANK, backoff_delay_seconds, work_subject
+from .subjects import PRIORITY_RANK, backoff_delay_seconds, dlq_subject, work_subject
 
 
 @dataclass
@@ -230,9 +230,13 @@ class JetStreamQueue:
         from nats.js.api import ConsumerConfig  # noqa: PLC0415
 
         durable = f"{self._prefix}_{priority.value}_worker"
+        # C1 fix: explicitly specify stream name to avoid
+        # find_stream_name_by_subject timeout in NATS JetStream.
+        stream_name = f"{self._prefix}_{priority.value}"
         sub = await self._js.pull_subscribe(
             subject=work_subject(self._prefix, priority),
             durable=durable,
+            stream=stream_name,
             config=ConsumerConfig(max_deliver=self._max_deliver, ack_wait=30),
         )
         self._subs[priority] = sub
@@ -247,20 +251,47 @@ class JetStreamQueue:
             event_type = payload.get("type", "")
             handler = handlers.get(event_type)
             if handler is None:
-                # Unknown type: ack to avoid poisoning the stream (parity with
-                # the in-memory worker which dead-letters, but here we log).
+                # H15 fix: log unknown event types for observability.
+                import logging  # noqa: PLC0415
+                logging.getLogger("marine_data_engine.queue").warning(
+                    "unknown event type %r on priority=%s — acked to avoid poison",
+                    event_type, priority.value,
+                )
                 await msg.ack()
                 return
             result = handler(payload)
             if asyncio.iscoroutine(result):
                 await result
             await msg.ack()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             # Respect max_deliver: NAK for redelivery with backoff. JetStream
             # dead-letters (stops redelivery) once num_delivered > max_deliver.
+            import logging as _logging  # noqa: PLC0415
+            _dlog = _logging.getLogger("marine_data_engine.queue")
             meta = getattr(msg, "metadata", None)
             delivered = getattr(getattr(meta, "num_delivered", None), "real", None)
-            delay = backoff_delay_seconds(delivered or 1)
+            num_delivered = delivered or 1
+            delay = backoff_delay_seconds(num_delivered)
+            # H14 fix: publish to DLQ when retries exhausted.
+            if num_delivered >= self._max_deliver:
+                try:
+                    dlq_payload = {
+                        "original": envelope,
+                        "error": str(exc),
+                        "attempts": num_delivered,
+                    }
+                    await self._js.publish(
+                        dlq_subject(self._prefix, priority),
+                        json.dumps(dlq_payload).encode("utf-8"),
+                    )
+                except Exception:  # noqa: BLE001
+                    _dlog.error("DLQ publish failed for priority=%s", priority.value)
+                await msg.ack()
+                _dlog.warning(
+                    "message dead-lettered: priority=%s type=%s attempts=%d error=%s",
+                    priority.value, event_type, num_delivered, exc,
+                )
+                return
             try:
                 await msg.nak(delay=delay)
             except TypeError:  # pragma: no cover - older client signature

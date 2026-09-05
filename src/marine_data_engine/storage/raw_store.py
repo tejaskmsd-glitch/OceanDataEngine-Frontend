@@ -42,11 +42,16 @@ def _sha256(data: bytes) -> str:
 
 
 def build_key(provider: str, dataset: str, checksum: str, ext: str, when: datetime) -> str:
-    """Build a deterministic, date-partitioned storage key."""
+    """Build a deterministic, content-addressed storage key.
+
+    C7 fix: uses hash-prefix partitioning instead of date partitioning so
+    identical content always maps to the same key regardless of ingestion date,
+    enabling correct cross-day deduplication.
+    """
     ext = ext.lstrip(".")
     return (
         f"{provider.lower()}/{dataset.lower()}/"
-        f"{when:%Y}/{when:%m}/{when:%d}/{checksum}.{ext}"
+        f"{checksum[:2]}/{checksum[2:4]}/{checksum}.{ext}"
     )
 
 
@@ -151,8 +156,12 @@ class S3RawStore:
         try:
             self._client.head_object(Bucket=self.bucket, Key=key)
             return True
-        except ClientError:
-            return False
+        except ClientError as exc:
+            # H3 fix: only treat 404-like errors as "not found".
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            if error_code in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise  # Re-raise 403, 500, throttling, etc.
 
     def put(
         self,
@@ -169,8 +178,14 @@ class S3RawStore:
         key = build_key(provider, dataset, checksum, ext, when)
         already = self._head(key)
         if not already:
+            import base64  # noqa: PLC0415
+            sha256_b64 = base64.b64encode(bytes.fromhex(checksum)).decode("ascii")
             extra = {"ContentType": media_type} if media_type else {}
-            self._client.put_object(Bucket=self.bucket, Key=key, Body=data, **extra)
+            # H5 fix: enforce write-time integrity verification.
+            self._client.put_object(
+                Bucket=self.bucket, Key=key, Body=data,
+                ChecksumSHA256=sha256_b64, **extra,
+            )
         return StoredObject(
             uri=f"s3://{self.bucket}/{key}",
             key=key,

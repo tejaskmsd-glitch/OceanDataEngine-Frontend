@@ -194,6 +194,62 @@ class IngestionService:
                 self._ingest_observation(obs, raw, run, summary)
             for forecast in result.forecasts:
                 self._ingest_forecast(forecast, raw, run, summary)
+            # C5 fix: ingest cyclone and tsunami hazards as alerts.
+            # These are critical safety data that must never be silently dropped.
+            for cyclone in getattr(result, "cyclones", []):
+                from ..sources.base import ParsedAlert  # noqa: PLC0415
+                alert = ParsedAlert(
+                    alert_uid=cyclone.cyclone_id,
+                    event_type="cyclone",
+                    severity="extreme",
+                    certainty="observed",
+                    urgency="immediate",
+                    headline=f"Cyclone {cyclone.name or cyclone.cyclone_id}",
+                    description=(
+                        f"Category: {cyclone.intensity_category or 'unknown'}, "
+                        f"Max wind: {cyclone.max_sustained_wind or '?'} km/h, "
+                        f"Central pressure: {cyclone.central_pressure or '?'} hPa"
+                    ),
+                    area_description=None,
+                    geometry=cyclone.track_geometry,
+                    issued_at=cyclone.issue_time,
+                    effective_from=cyclone.issue_time,
+                    valid_until=None,
+                    source_url=None,
+                    provider=cyclone.provider,
+                    source_dataset=cyclone.source_dataset,
+                )
+                self._ingest_alert(alert, raw, run, summary)
+            for tsunami in getattr(result, "tsunamis", []):
+                from ..sources.base import ParsedAlert  # noqa: PLC0415
+                geometry = None
+                if tsunami.eq_lat is not None and tsunami.eq_lon is not None:
+                    geometry = {
+                        "type": "Point",
+                        "coordinates": [tsunami.eq_lon, tsunami.eq_lat],
+                    }
+                alert = ParsedAlert(
+                    alert_uid=tsunami.event_id,
+                    event_type="tsunami",
+                    severity=("extreme" if tsunami.alert_level in ("warning", "watch") else "severe"),
+                    certainty="observed",
+                    urgency="immediate",
+                    headline=f"Tsunami {tsunami.alert_level or 'alert'}: M{tsunami.magnitude or '?'}",
+                    description=(
+                        f"Magnitude: {tsunami.magnitude}, Depth: {tsunami.depth} km, "
+                        f"Status: {tsunami.tsunami_status}, "
+                        f"Regions: {', '.join(tsunami.affected_regions or [])}"
+                    ),
+                    area_description=", ".join(tsunami.affected_regions or []),
+                    geometry=geometry,
+                    issued_at=tsunami.earthquake_time,
+                    effective_from=tsunami.earthquake_time,
+                    valid_until=None,
+                    source_url=None,
+                    provider=tsunami.provider,
+                    source_dataset=tsunami.source_dataset,
+                )
+                self._ingest_alert(alert, raw, run, summary)
         except Exception as exc:  # noqa: BLE001
             # Mark lineage failed and emit a processing.failed event before
             # re-raising so callers still observe the error.
