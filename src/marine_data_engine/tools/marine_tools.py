@@ -488,7 +488,10 @@ register_tool(
 register_tool(
     ToolDefinition(
         name="assess_risk",
-        description="Assess marine risk (0-100) from environmental factors, warnings, and cyclone proximity.",
+        description=(
+            "Assess marine risk (0-100) from environmental factors, warnings, "
+            "and cyclone proximity."
+        ),
         input_schema={
             "type": "object",
             "properties": {

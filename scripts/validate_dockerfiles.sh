@@ -14,10 +14,10 @@ lint_one() {
     local f="$1"
     if command -v hadolint >/dev/null 2>&1; then
         echo "hadolint ${f}"
-        hadolint "${f}" || true
+        hadolint --failure-threshold error "${f}"
     elif command -v docker >/dev/null 2>&1; then
         echo "hadolint (docker) ${f}"
-        docker run --rm -i hadolint/hadolint < "${f}" || true
+        docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < "${f}"
     else
         echo "basic-check ${f}"
         grep -qE '^FROM ' "${f}" || { echo "  ERROR: no FROM in ${f}"; exit 1; }

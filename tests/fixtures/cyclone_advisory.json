@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "cyclone_id BOB-04-2026 and 'Cyclone Vayu' are fabricated for tests and must never be treated as a real IMD cyclone advisory.",
+    "provenance": "synthetic-test-fixture"
+  },
   "cyclone_id": "BOB-04-2026",
   "name": "Cyclone Vayu",
   "issue_time": "2026-09-03T09:00:00Z",

@@ -1,0 +1,44 @@
+{
+  "_fixture_metadata": {
+    "synthetic": true,
+    "test_only": true,
+    "purpose": "Synthetic representation of the verified INCOIS districtpolygons GeoJSON contract. NOT production data.",
+    "warning": "Coordinates are fabricated coarse boxes. Join key is normalized STATE + District as verified upstream.",
+    "provenance": "synthetic-test-fixture"
+  },
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"STATE": "Tamil Nadu", "District": "Kanniyakumari"},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.3, 8.0], [77.7, 8.0], [77.7, 8.4], [77.3, 8.4], [77.3, 8.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"STATE": "Kerala", "District": "Thiruvananthapuram"},
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [[[[76.8, 8.3], [77.2, 8.3], [77.2, 8.7], [76.8, 8.7], [76.8, 8.3]]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"STATE": "Andhra Pradesh", "District": "Nellore"},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[79.8, 14.2], [80.2, 14.2], [80.2, 14.6], [79.8, 14.6], [79.8, 14.2]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"STATE": "Karnataka", "District": "Udupi"},
+      "geometry": {
+        "type": "Point",
+        "coordinates": [74.7, 13.3]
+      }
+    }
+  ]
+}

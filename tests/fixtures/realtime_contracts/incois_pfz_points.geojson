@@ -1,0 +1,41 @@
+{
+  "_fixture_metadata": {
+    "synthetic": true,
+    "test_only": true,
+    "purpose": "Synthetic representation of the verified INCOIS /api/ws/pfz Point FeatureCollection. NOT production data.",
+    "provenance": "synthetic-test-fixture"
+  },
+  "type": "FeatureCollection",
+  "name": "PFZ_04Sep2026",
+  "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+  "features": [
+    {
+      "type": "Feature",
+      "id": 1,
+      "properties": {
+        "LANDINGNAM": "Malpe",
+        "STATENAME": "Karnataka",
+        "COUNTRY": "IND-KA-01",
+        "Distance": 18.5,
+        "Direction": "SW",
+        "Angle": 225,
+        "Depth": 60
+      },
+      "geometry": {"type": "Point", "coordinates": [74.4, 13.25]}
+    },
+    {
+      "type": "Feature",
+      "id": 2,
+      "properties": {
+        "LANDINGNAM": "Ratnagiri",
+        "STATENAME": "Maharashtra",
+        "COUNTRY": "IND-MH-02",
+        "Distance": 22.0,
+        "Direction": "W",
+        "Angle": 270,
+        "Depth": 80
+      },
+      "geometry": {"type": "Point", "coordinates": [73.0, 16.98]}
+    }
+  ]
+}

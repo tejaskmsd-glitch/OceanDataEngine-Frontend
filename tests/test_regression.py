@@ -1,7 +1,7 @@
 import pytest
 
-from marine_data_engine.storage.raw_store import InMemoryRawStore
 from marine_data_engine.messaging.queue import JetStreamQueue
+from marine_data_engine.storage.raw_store import InMemoryRawStore
 
 # R3: Note about PostgreSQL schema testing
 # Migrations are currently tested via `make migrate`, which applies

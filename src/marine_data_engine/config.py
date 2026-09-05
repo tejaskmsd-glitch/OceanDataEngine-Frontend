@@ -7,12 +7,11 @@ are safe for local development and deterministic tests.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-import os
 
 
 class DatabaseSettings(BaseSettings):
@@ -55,6 +54,8 @@ class ObjectStoreSettings(BaseSettings):
     access_key: str = Field(default="minioadmin", repr=False)
     secret_key: str = Field(default="minioadmin", repr=False)
     raw_bucket: str = "marine-raw"
+    processed_bucket: str = "marine-processed"
+    artifact_bucket: str = "marine-artifacts"
     # When true, storage writes are recorded to an in-process store instead of
     # calling MinIO/S3. Tests always run enabled.
     in_memory: bool = False
@@ -77,11 +78,8 @@ class MessagingSettings(BaseSettings):
 class SourceCredentialsSettings(BaseSettings):
     """Credentials for authenticated upstream connectors.
 
-    These are intentionally blank by default: with empty values the
-    corresponding connectors stay disabled and raise
-    :class:`AuthenticationRequiredError` rather than attempting network I/O
-    against an endpoint that would reject them. Populated only from the
-    environment (12-factor); never hard-coded.
+    These are intentionally blank by default. Missing credentials are surfaced
+    as explicit auth-blocked source states; workers never substitute fixtures.
     """
 
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
@@ -107,8 +105,9 @@ class ServiceSettings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     log_json: bool = True
-    # Live source connectors are DISABLED by default. Ingestion runs from
-    # deterministic fixtures unless explicitly enabled by an operator.
+    # Live source connectors are disabled by default. Workers record a disabled
+    # source state and never ingest fixtures implicitly; fixture adapters are
+    # available only to tests or explicit callers.
     enable_live_sources: bool = False
     # Datasets are considered stale past this multiple of their expected
     # update interval unless a per-dataset override is configured.

@@ -58,10 +58,31 @@ def geometry_centroid(geojson: dict[str, Any]) -> tuple[float, float]:
 
 
 def point_in_geometry(lat: float, lon: float, geojson: dict[str, Any]) -> bool:
-    """Return True if the WGS84 point lies within the geometry."""
+    """Return True when the point is inside or on the geometry boundary."""
     from shapely.geometry import Point
 
-    return load_geometry(geojson).contains(Point(lon, lat))
+    return load_geometry(geojson).covers(Point(lon, lat))
+
+
+def nearest_geometry_distance_km(
+    lat: float, lon: float, geojson: dict[str, Any]
+) -> float:
+    """Geodesic distance to the nearest point on a GeoJSON geometry.
+
+    Shapely finds the nearest coordinate in the source CRS; haversine then
+    computes the WGS84 distance. Points covered by a polygon/line/point return
+    zero. This portable implementation mirrors ``ST_Distance`` semantics more
+    faithfully than centroid distance for large polygons and long lines.
+    """
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
+
+    probe = Point(lon, lat)
+    geometry = load_geometry(geojson)
+    if geometry.covers(probe):
+        return 0.0
+    _probe_nearest, geometry_nearest = nearest_points(probe, geometry)
+    return haversine_km(lat, lon, geometry_nearest.y, geometry_nearest.x)
 
 
 # normalize_longitude now lives in :mod:`marine_data_engine.domain.units`;

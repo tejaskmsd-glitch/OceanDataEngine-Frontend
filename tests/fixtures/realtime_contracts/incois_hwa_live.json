@@ -1,0 +1,14 @@
+{
+  "_fixture_metadata": {
+    "synthetic": true,
+    "test_only": true,
+    "purpose": "Synthetic representation of the verified INCOIS hwassalatestdata contract for offline tests. NOT production data.",
+    "warning": "All values are fabricated. The HWAJson/SSAJson fields are JSON strings (double-encoded) exactly as the verified upstream shape emits them; the parser must json.loads them a second time.",
+    "provenance": "synthetic-test-fixture",
+    "verified_contract_shape": "top-level object with LatestHWADate/LatestSSADate scalars and HWAJson/SSAJson embedded-JSON-string arrays"
+  },
+  "LatestHWADate": "2026-09-04",
+  "LatestSSADate": "2026-09-04",
+  "HWAJson": "[{\"OBJECTID\": 101, \"STATE\": \"Tamil Nadu\", \"District\": \"Kanniyakumari\", \"Alert\": \"HIGH WAVE WARNING\", \"Color\": \"ORANGE\", \"Issue Date\": \"04-09-2026\", \"Message\": \"High waves in the range 3.0-3.5 m are likely during 11:30 hours on 04-09-2026 to 23:30 hours on 04-09-2026 along and off the coast.\"}, {\"OBJECTID\": 102, \"STATE\": \"Kerala\", \"District\": \"Thiruvananthapuram\", \"Alert\": \"HIGH WAVE WATCH\", \"Color\": \"YELLOW\", \"Issue Date\": \"04-09-2026\", \"Message\": \"High waves in the range 2.5-3.0 m are likely during 14:00 hours on 04-09-2026 to 02:00 hours on 05-09-2026 along and off the coast.\"}]",
+  "SSAJson": "[{\"OBJECTID\": 201, \"STATE\": \"Andhra Pradesh\", \"District\": \"Nellore\", \"Alert\": \"SWELL SURGE WARNING\", \"Color\": \"RED\", \"Issue Date\": \"04-09-2026\", \"Message\": \"Swell surge activity is likely during 06:00 hours on 04-09-2026 to 18:00 hours on 04-09-2026 along and off the coast.\"}]"
+}

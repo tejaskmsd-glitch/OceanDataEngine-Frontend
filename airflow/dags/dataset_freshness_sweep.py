@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-
 from marine_common import publish_ingest_trigger
 
 
@@ -23,7 +22,7 @@ from marine_common import publish_ingest_trigger
     dagrun_timeout=pendulum.duration(minutes=10),
     tags=["marine", "freshness", "health"],
     default_args={
-        "retries": 2, 
+        "retries": 2,
         "retry_delay": pendulum.duration(seconds=30),
         "execution_timeout": pendulum.duration(minutes=5),
     },

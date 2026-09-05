@@ -33,16 +33,7 @@ EXPOSE 80
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
     CMD curl -fsS http://localhost/ || exit 1
 
-COPY <<-"EOF" /docker-entrypoint.sh
-#!/bin/sh
-cat <<JSON > /usr/share/nginx/html/config.js
-window.__RUNTIME_CONFIG__ = {
-  "API_BASE_URL": "${VITE_API_BASE_URL:-http://localhost:8000}",
-  "WS_BASE_URL": "${VITE_WS_BASE_URL:-ws://localhost:8000}"
-};
-JSON
-exec nginx -g "daemon off;"
-EOF
+COPY docker/dashboard/entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 CMD ["/docker-entrypoint.sh"]

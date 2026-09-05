@@ -29,6 +29,12 @@ import re
 import sys
 from typing import Any
 
+_CANONICAL_PROVIDER_CODES = {
+    "imd": "IMD",
+    "incois": "INCOIS",
+    "mosdac": "MOSDAC",
+    "marine regions": "Marine Regions",
+}
 
 # Map numeric priority strings from the legacy fixture to the documented
 # canonical enum values.
@@ -56,7 +62,11 @@ def parse_update_interval(value: Any) -> int | None:
 
     text = str(value).lower()
 
-    match = re.search(r"poll\s+(\d+)\s*([smhd])", text)
+    match = re.search(
+        r"(?:poll\s+)?(\d+)\s*"
+        r"(seconds?|minutes?|hours?|days?|[smhd])\b",
+        text,
+    )
     if not match:
         return None
 
@@ -70,7 +80,7 @@ def parse_update_interval(value: Any) -> int | None:
         "d": 24 * 60 * 60,
     }
 
-    return amount * multipliers[unit]
+    return amount * multipliers[unit[0]]
 
 
 def authentication_required(value: Any) -> bool:
@@ -170,6 +180,8 @@ def main() -> int:
             expected_update_interval_s,
             priority,
             status,
+            last_result_state,
+            status_detail,
             licensing_note
         )
         VALUES (
@@ -186,6 +198,8 @@ def main() -> int:
             %(expected_update_interval_s)s,
             %(priority)s,
             %(status)s,
+            %(last_result_state)s,
+            %(status_detail)s,
             %(licensing_note)s
         )
         ON CONFLICT (key) DO UPDATE SET
@@ -200,7 +214,18 @@ def main() -> int:
             auth_required = EXCLUDED.auth_required,
             expected_update_interval_s = EXCLUDED.expected_update_interval_s,
             priority = EXCLUDED.priority,
-            status = EXCLUDED.status,
+            status = CASE
+                WHEN dataset.last_checked_at IS NULL THEN EXCLUDED.status
+                ELSE dataset.status
+            END,
+            last_result_state = CASE
+                WHEN dataset.last_checked_at IS NULL THEN EXCLUDED.last_result_state
+                ELSE dataset.last_result_state
+            END,
+            status_detail = CASE
+                WHEN dataset.last_checked_at IS NULL THEN EXCLUDED.status_detail
+                ELSE dataset.status_detail
+            END,
             licensing_note = EXCLUDED.licensing_note,
             updated_at = now();
     """
@@ -246,7 +271,10 @@ def main() -> int:
                             f"Verification: {verification_status}"
                         )
 
-                source_code = str(provider).strip().lower()
+                normalized_provider = str(provider).strip()
+                source_code = _CANONICAL_PROVIDER_CODES.get(
+                    normalized_provider.casefold(), normalized_provider
+                )
 
                 cur.execute(
                     source_upsert,
@@ -305,6 +333,8 @@ def main() -> int:
                         ),
                         "priority": priority,
                         "status": status,
+                        "last_result_state": row.get("result_state", "not_run"),
+                        "status_detail": row.get("status_detail"),
                         "licensing_note": licensing_note,
                     },
                 )

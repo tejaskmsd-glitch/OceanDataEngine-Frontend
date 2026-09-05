@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-
 from marine_common import publish_ingest_trigger
 
 MOSDAC_SEARCH = "https://mosdac.gov.in/apios/datasets.json"
@@ -26,7 +25,7 @@ MOSDAC_SEARCH = "https://mosdac.gov.in/apios/datasets.json"
     dagrun_timeout=pendulum.duration(minutes=15),
     tags=["marine", "mosdac", "registry", "P0-support"],
     default_args={
-        "retries": 3, 
+        "retries": 3,
         "retry_delay": pendulum.duration(minutes=2),
         "execution_timeout": pendulum.duration(minutes=5),
     },

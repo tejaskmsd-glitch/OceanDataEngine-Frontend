@@ -10,12 +10,12 @@ and benign).
 from __future__ import annotations
 
 from marine_data_engine.domain.safety_gate import (
+    REASON_SEA_STATE_UNKNOWN,
+    REASON_TIDE_UNAVAILABLE,
+    REASON_WAVE_UNAVAILABLE,
+    REASON_WIND_UNAVAILABLE,
     STATUS_CLEARED,
     STATUS_NOT_CLEARED,
-    REASON_WAVE_UNAVAILABLE,
-    REASON_SEA_STATE_UNKNOWN,
-    REASON_WIND_UNAVAILABLE,
-    REASON_TIDE_UNAVAILABLE,
     evaluate_safety_gate,
 )
 
@@ -129,8 +129,8 @@ def test_known_zone_status_is_not_flagged_unknown():
     unknown — the engine knows it when the data carries a status.
     """
     from marine_data_engine.domain.safety_gate import (
-        REASON_ZONE_STATUS_UNKNOWN,
         REASON_RESTRICTED_ZONE_ENTRY,
+        REASON_ZONE_STATUS_UNKNOWN,
     )
 
     decision = evaluate_safety_gate(

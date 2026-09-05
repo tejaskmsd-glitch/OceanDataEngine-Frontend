@@ -1,5 +1,15 @@
 # Marine Data Source Mapping
 
+> **Runtime status update (2026-09-05):** This is a dated discovery artifact,
+> not the current connector/status contract. [`SOURCE_GAPS.md`](./SOURCE_GAPS.md)
+> supersedes all HAR-A/HAR-C/HAR-D and IMD-buoy claims below. Since this mapping
+> was written, live PFZ Point/LineString, HWA/SSA, TEWS latest-observation, and
+> INCOIS OON buoy contracts were verified and implemented. Numeric IMD NWP
+> remains `contract_unavailable`. Marine Regions India EEZ was added as a
+> separately approved candidate source but remains `license_gated`; it does not
+> supply MPA/restricted/naval/firing zones. Historical notes are retained here
+> solely to preserve the original research record.
+>
 > Scope note: This document maps **every** required raw parameter and derived capability from
 > `marine_data_layer_requirements.md` (and the build directives in `prompt.md`) to concrete,
 > evidence-backed data sources across the **three in-scope providers only** — **IMD, INCOIS, MOSDAC**.

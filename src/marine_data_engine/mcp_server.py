@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
@@ -95,15 +96,261 @@ def _ts() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _evidence(tool_name: str, sources: list[dict], warnings: list[str] | None = None) -> dict:
-    """Build an evidence/provenance envelope for every tool response."""
+def _resolve_parameters(raw: list[str] | None) -> tuple[str, ...]:
+    """Normalize the MCP ``parameters`` arg into the tuple the query layer expects.
+
+    The query functions filter with ``parameter.in_(parameters)`` and have no
+    empty guard, so an empty collection would match nothing and produce a false
+    SOURCE_GAP. When the caller supplies no parameters we therefore default to
+    the ocean+weather groups (return everything relevant); otherwise we pass the
+    requested names as a tuple. Mirrors ``tools.marine_tools._resolve_parameters``.
+    """
+    if raw:
+        return tuple(str(p) for p in raw)
+    return queries.OCEAN_PARAMETERS + queries.WEATHER_PARAMETERS + queries.TIDE_PARAMETERS
+
+
+def _sources_from_records(records: list[dict]) -> list[dict]:
+    """Derive evidence sources only from records actually returned."""
+    sources: list[dict] = []
+    seen: set[tuple] = set()
+    for record in records:
+        provider = record.get("provider") or record.get("source")
+        dataset = (
+            record.get("source_dataset")
+            or record.get("dataset")
+            or record.get("key")
+        )
+        source_url = record.get("source_url")
+        retrieved_at = record.get("retrieved_at")
+        key = (provider, dataset, source_url)
+        if not provider or key in seen:
+            continue
+        seen.add(key)
+        sources.append(
+            {
+                "provider": provider,
+                "dataset": dataset,
+                "source_url": source_url,
+                "retrieved_at": retrieved_at,
+            }
+        )
+    return sources
+
+
+def _source_outcome(
+    records: list[dict], source_states: list[dict], *, subject: str
+) -> tuple[list[str], str]:
+    """Turn canonical poll states into an explicit MCP capability outcome."""
+    blocked_states = {
+        "auth_blocked",
+        "contract_unavailable",
+        "license_gated",
+        "disabled",
+        "source_unavailable",
+        "contract_error",
+        "processing_error",
+        "not_run",
+        "not_registered",
+    }
+    if records:
+        partial = [state for state in source_states if state.get("state") in blocked_states]
+        if partial:
+            details = ", ".join(
+                f"{state['dataset']}={state.get('state')}" for state in partial
+            )
+            return ([f"PARTIAL_SOURCE_COVERAGE: {details}"], "partial")
+        return ([], "available")
+
+    states = {str(state.get("state") or "not_run") for state in source_states}
+    if states and states <= {"empty"}:
+        return (
+            [
+                f"SOURCE_HEALTHY_EMPTY: upstream sources are healthy but currently "
+                f"contain no {subject}."
+            ],
+            "healthy_empty",
+        )
+    if states & {"auth_blocked"}:
+        return (
+            [
+                f"SOURCE_AUTH_BLOCKED: {subject} cannot be retrieved until the "
+                "documented source authentication contract is available."
+            ],
+            "auth_blocked",
+        )
+    if states & {"contract_unavailable"}:
+        return (
+            [
+                "SOURCE_CONTRACT_UNAVAILABLE: no verified machine contract is "
+                f"available for {subject}."
+            ],
+            "contract_unavailable",
+        )
+    if states & {"license_gated"}:
+        return (
+            [
+                f"SOURCE_LICENSE_GATED: authoritative {subject} ingestion requires "
+                "reviewed permission/attribution terms."
+            ],
+            "license_gated",
+        )
+    if states & {"source_unavailable", "contract_error", "processing_error"}:
+        return (
+            [
+                f"SOURCE_UNAVAILABLE: the source for {subject} failed or violated "
+                "its verified contract."
+            ],
+            "source_unavailable",
+        )
+    if states & {"disabled"}:
+        return (
+            [f"SOURCE_DISABLED: live ingestion for {subject} is disabled."],
+            "disabled",
+        )
+    if states & {"not_run", "not_registered"} or not source_states:
+        return (
+            [f"SOURCE_NOT_INGESTED: {subject} has not yet been scheduled/ingested."],
+            "not_ingested",
+        )
+    # A successful source snapshot can legitimately have no spatial/parameter
+    # match for this query; that is not a source outage.
+    return (
+        [f"NO_MATCHING_RECORDS: source data is available but no {subject} matched this query."],
+        "available",
+    )
+
+
+def _evidence(
+    tool_name: str,
+    sources: list[dict],
+    warnings: list[str] | None = None,
+    record_count: int = 0,
+    query_params: dict | None = None,
+    *,
+    capability_status: str | None = None,
+    source_states: list[dict] | None = None,
+) -> dict:
+    """Build a row-derived evidence envelope for every tool response."""
     return {
+        "request_id": uuid.uuid4().hex,
         "tool": tool_name,
         "generated_at": _ts(),
         "sources": sources,
+        "source_states": source_states or [],
         "warnings": warnings or [],
-        "capability_status": "source_gap" if warnings else "available",
+        "record_count": record_count,
+        "query_params": query_params or {},
+        "capability_status": capability_status or ("source_gap" if warnings else "available"),
+        "data_provenance": "database" if record_count > 0 else "none",
+        "hallucination_guard": (
+            "This response contains only Marine Data Engine records. Do not "
+            "fabricate, infer, or approximate missing upstream values or geometry."
+        ),
     }
+
+
+def _persist_evidence(session, evidence: dict, records: list[dict]) -> None:
+    def json_safe(value):
+        return json.loads(json.dumps(value, default=str))
+
+    record_refs = [
+        next(
+            (
+                record[key]
+                for key in ("observation_uid", "forecast_uid", "alert_uid", "pfz_uid", "zone_uid")
+                if record.get(key)
+            ),
+            None,
+        )
+        for record in records
+    ]
+    record_refs = [reference for reference in record_refs if reference]
+    data_versions = {
+        state["dataset"]: str(
+            state.get("last_success_at") or state.get("last_checked_at") or "not_run"
+        )
+        for state in evidence.get("source_states", [])
+    }
+    data_lineage = [
+        {
+            "source_url": source.get("source_url"),
+            "retrieved_at": str(source.get("retrieved_at")) if source.get("retrieved_at") else None,
+        }
+        for source in evidence.get("sources", [])
+    ]
+    queries.save_evidence(
+        session,
+        request_id=evidence["request_id"],
+        endpoint=evidence["tool"],
+        query_params=json_safe(evidence.get("query_params", {})),
+        sources=json_safe(evidence.get("sources", [])),
+        record_refs=record_refs,
+        confidence=None,
+        freshness={"source_states": json_safe(evidence.get("source_states", []))},
+        quality={},
+        warnings=evidence.get("warnings", []),
+        capability_status=evidence.get("capability_status"),
+        data_versions=data_versions,
+        data_lineage=data_lineage,
+    )
+
+
+def _persist_standalone_evidence(evidence: dict, records: list[dict] | None = None) -> None:
+    """Persist pure-computation evidence without making computation DB-dependent."""
+    try:
+        with session_scope() as session:
+            _persist_evidence(session, evidence, records or [])
+        evidence["evidence_persisted"] = True
+    except Exception as exc:  # evidence failure must not change a safety calculation
+        logging.getLogger(__name__).warning(
+            "MCP evidence persistence unavailable for %s: %s",
+            evidence.get("tool"),
+            type(exc).__name__,
+        )
+        evidence["evidence_persisted"] = False
+        evidence.setdefault("warnings", []).append(
+            "EVIDENCE_PERSISTENCE_UNAVAILABLE: request result was computed but its "
+            "audit row could not be stored."
+        )
+
+
+def _zone_outcome(
+    records: list[dict],
+    coverage: dict,
+    source_states: list[dict],
+    initial_warnings: list[str] | None = None,
+) -> tuple[list[str], str]:
+    """Report EEZ source health separately from other unloaded zone categories."""
+    warnings = list(initial_warnings or [])
+    unavailable = [
+        category
+        for category, state in coverage.items()
+        if state.get("status") != "available"
+    ]
+    warnings.extend(f"ZONE_CATEGORY_NOT_LOADED: {category}" for category in unavailable)
+
+    eez_types = {"eez", "boundary", "international_boundary"}
+    eez_records = [
+        record
+        for record in records
+        if str(record.get("zone_type") or "").strip().lower() in eez_types
+    ]
+    eez_warnings, eez_capability = _source_outcome(
+        eez_records,
+        source_states,
+        subject="authoritative India EEZ boundary geometry",
+    )
+    warnings.extend(eez_warnings)
+    warnings = list(dict.fromkeys(warnings))
+
+    if records:
+        capability = "partial" if warnings else "available"
+    elif eez_capability not in {"available", "partial"}:
+        capability = eez_capability
+    else:
+        capability = "source_gap" if warnings else "available"
+    return warnings, capability
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -119,27 +366,44 @@ def query_pfz(
 ) -> dict:
     """Find Potential Fishing Zones (PFZ) near a location.
 
-    Returns active PFZ advisories within the search radius, each with
-    SST, chlorophyll, confidence, distance, and point-in-polygon status.
+    Returns the latest source snapshot of PFZ destination points and advisory
+    lines within the search radius. Geometry type is preserved; ``inside`` is
+    meaningful for polygons and exact on-geometry matches only for points/lines.
     Use this to answer: "Where should I fish?", "Nearest PFZ off Goa?",
     "Is my vessel inside an active PFZ?"
     """
+    query_params = {
+        "lat": lat,
+        "lon": lon,
+        "radius_km": radius_km,
+        "include_expired": include_expired,
+    }
     try:
-        with session_scope() as s:
-            results = queries.query_pfz(s, lat=lat, lon=lon, radius_km=radius_km,
-                                         include_expired=include_expired)
+        with session_scope() as session:
+            results = queries.query_pfz(
+                session,
+                lat=lat,
+                lon=lon,
+                radius_km=radius_km,
+                include_expired=include_expired,
+            )
+            source_states = queries.get_dataset_source_states(session, ("incois_pfz",))
+            warnings, capability = _source_outcome(
+                results, source_states, subject="PFZ destination points/advisory lines"
+            )
+            evidence = _evidence(
+                "query_pfz",
+                _sources_from_records(results),
+                warnings,
+                record_count=len(results),
+                query_params=query_params,
+                capability_status=capability,
+                source_states=source_states,
+            )
+            _persist_evidence(session, evidence, results)
     except Exception as exc:
         return _db_error_response("query_pfz", exc)
-    warnings = []
-    if not results:
-        warnings.append(f"No PFZ advisories found within {radius_km} km of ({lat}, {lon})")
-    return {
-        "data": results,
-        "count": len(results),
-        "evidence": _evidence("query_pfz",
-                              [{"provider": "INCOIS", "dataset": "incois_pfz"}],
-                              warnings),
-    }
+    return {"data": results, "count": len(results), "evidence": evidence}
 
 
 @mcp.tool()
@@ -158,30 +422,44 @@ def query_alerts(
     Use this for: "Any cyclone warnings in Bay of Bengal?",
     "Alerts near Vizag?", "Is there a tsunami bulletin?"
     """
+    query_params = {
+        "event_type": event_type,
+        "active_only": active_only,
+        "lat": lat,
+        "lon": lon,
+        "radius_km": radius_km,
+        "limit": limit,
+    }
     try:
-        with session_scope() as s:
+        with session_scope() as session:
             results = queries.query_alerts(
-                s, event_type=event_type, active_only=active_only,
-                lat=lat, lon=lon, radius_km=radius_km, limit=limit,
+                session,
+                event_type=event_type,
+                active_only=active_only,
+                lat=lat,
+                lon=lon,
+                radius_km=radius_km,
+                limit=limit,
             )
+            source_states = queries.get_dataset_source_states(
+                session, ("imd_cap", "incois_hwa")
+            )
+            warnings, capability = _source_outcome(
+                results, source_states, subject="marine hazard alerts"
+            )
+            evidence = _evidence(
+                "query_alerts",
+                _sources_from_records(results),
+                warnings,
+                record_count=len(results),
+                query_params=query_params,
+                capability_status=capability,
+                source_states=source_states,
+            )
+            _persist_evidence(session, evidence, results)
     except Exception as exc:
         return _db_error_response("query_alerts", exc)
-    warnings = []
-    if not results:
-        msg = f"No {'active ' if active_only else ''}alerts"
-        if event_type:
-            msg += f" of type '{event_type}'"
-        if lat is not None:
-            msg += f" within {radius_km or 'any'} km of ({lat}, {lon})"
-        warnings.append(msg)
-    return {
-        "data": results,
-        "count": len(results),
-        "evidence": _evidence("query_alerts",
-                              [{"provider": "IMD", "dataset": "imd_cap"},
-                               {"provider": "INCOIS", "dataset": "incois_hwa"}],
-                              warnings),
-    }
+    return {"data": results, "count": len(results), "evidence": evidence}
 
 
 @mcp.tool()
@@ -202,25 +480,43 @@ def query_observations(
     """
     from dateutil.parser import isoparse
     at_dt = isoparse(at) if at else None
+    resolved_params = _resolve_parameters(parameters)
+    query_params = {
+        "parameters": parameters,
+        "lat": lat,
+        "lon": lon,
+        "radius_km": radius_km,
+        "at": at,
+    }
     try:
-        with session_scope() as s:
+        with session_scope() as session:
             results = queries.query_observations(
-                s, parameters=parameters or [], lat=lat, lon=lon,
-                radius_km=radius_km, at=at_dt,
+                session,
+                parameters=resolved_params,
+                lat=lat,
+                lon=lon,
+                radius_km=radius_km,
+                at=at_dt,
             )
+            source_states = queries.get_dataset_source_states(
+                session, ("incois_buoy", "incois_tide")
+            )
+            warnings, capability = _source_outcome(
+                results, source_states, subject="buoy/tide observations"
+            )
+            evidence = _evidence(
+                "query_observations",
+                _sources_from_records(results),
+                warnings,
+                record_count=len(results),
+                query_params=query_params,
+                capability_status=capability,
+                source_states=source_states,
+            )
+            _persist_evidence(session, evidence, results)
     except Exception as exc:
         return _db_error_response("query_observations", exc)
-    warnings = []
-    if not results:
-        warnings.append(f"No observations found for params={parameters} near ({lat}, {lon})")
-    return {
-        "data": results,
-        "count": len(results),
-        "evidence": _evidence("query_observations",
-                              [{"provider": "IMD", "dataset": "imd_buoy"},
-                               {"provider": "INCOIS", "dataset": "incois_tide"}],
-                              warnings),
-    }
+    return {"data": results, "count": len(results), "evidence": evidence}
 
 
 @mcp.tool()
@@ -239,24 +535,41 @@ def query_forecasts(
     """
     from dateutil.parser import isoparse
     at_dt = isoparse(at) if at else None
+    resolved_params = _resolve_parameters(parameters)
+    query_params = {
+        "parameters": parameters,
+        "lat": lat,
+        "lon": lon,
+        "radius_km": radius_km,
+        "at": at,
+    }
     try:
-        with session_scope() as s:
+        with session_scope() as session:
             results = queries.query_forecasts(
-                s, parameters=parameters or [], lat=lat, lon=lon,
-                radius_km=radius_km, at=at_dt,
+                session,
+                parameters=resolved_params,
+                lat=lat,
+                lon=lon,
+                radius_km=radius_km,
+                at=at_dt,
             )
+            source_states = queries.get_dataset_source_states(session, ("imd_nwp",))
+            warnings, capability = _source_outcome(
+                results, source_states, subject="numeric IMD marine forecasts"
+            )
+            evidence = _evidence(
+                "query_forecasts",
+                _sources_from_records(results),
+                warnings,
+                record_count=len(results),
+                query_params=query_params,
+                capability_status=capability,
+                source_states=source_states,
+            )
+            _persist_evidence(session, evidence, results)
     except Exception as exc:
         return _db_error_response("query_forecasts", exc)
-    warnings = []
-    if not results:
-        warnings.append("SOURCE_GAP: No forecast data available for the requested parameters/location")
-    return {
-        "data": results,
-        "count": len(results),
-        "evidence": _evidence("query_forecasts",
-                              [{"provider": "IMD", "dataset": "imd_nwp"}],
-                              warnings),
-    }
+    return {"data": results, "count": len(results), "evidence": evidence}
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -280,8 +593,9 @@ def assess_risk(
     """Compute marine risk score (0-100) from environmental conditions.
 
     Returns risk level (LOW/MODERATE/HIGH/EXTREME), score, dominant risk
-    factors, and safety recommendation. Thresholds adjust by vessel_type:
-    small_motorized, traditional_canoe, deep_sea_trawler, cargo.
+    factors, and safety recommendation. ``vessel_type`` labels the configured
+    threshold profile; this build uses the same explicit default bands unless an
+    operator supplies calibrated per-fleet thresholds.
 
     Use this for: "Is it safe to go fishing tomorrow?",
     "Risk score off Porbandar?", "Should vessels evacuate?"
@@ -299,11 +613,29 @@ def assess_risk(
         pressure_trend=pressure_trend_hpa_3h,
         active_warnings=warnings_list,
         cyclone_distance_km=nearest_cyclone_km,
-        thresholds=RiskThresholds(),
+        thresholds=RiskThresholds(vessel_type=vessel_type),
     )
-    d = result.as_dict()
-    d["evidence"] = _evidence("assess_risk", [{"provider": "domain", "dataset": "risk_engine"}])
-    return d
+    data = result.as_dict()
+    evidence = _evidence(
+        "assess_risk",
+        [{"provider": "domain", "dataset": "risk_engine"}],
+        query_params={
+            "wave_height_m": wave_height_m,
+            "wind_speed_ms": wind_speed_ms,
+            "gust_speed_ms": gust_speed_ms,
+            "swell_height_m": swell_height_m,
+            "wave_period_s": wave_period_s,
+            "rainfall_mm_hr": rainfall_mm_hr,
+            "pressure_hpa": pressure_hpa,
+            "pressure_trend_hpa_3h": pressure_trend_hpa_3h,
+            "active_warnings": active_warnings,
+            "nearest_cyclone_km": nearest_cyclone_km,
+            "vessel_type": vessel_type,
+        },
+    )
+    _persist_standalone_evidence(evidence)
+    data["evidence"] = evidence
+    return data
 
 
 @mcp.tool()
@@ -336,10 +668,26 @@ def assess_suitability(
         ecological_hazards=ecological_hazards or [],
         fishery_advisories=fishery_advisories or [],
     )
-    d = result.as_dict()
-    d["evidence"] = _evidence("assess_suitability",
-                              [{"provider": "domain", "dataset": "suitability_engine"}])
-    return d
+    data = result.as_dict()
+    evidence = _evidence(
+        "assess_suitability",
+        [{"provider": "domain", "dataset": "suitability_engine"}],
+        query_params={
+            "sst": sst,
+            "chlorophyll": chlorophyll,
+            "current_speed_ms": current_speed_ms,
+            "wave_height_m": wave_height_m,
+            "wind_speed_ms": wind_speed_ms,
+            "nearest_pfz_km": nearest_pfz_km,
+            "sst_anomaly": sst_anomaly,
+            "chl_anomaly": chl_anomaly,
+            "ecological_hazards": ecological_hazards,
+            "fishery_advisories": fishery_advisories,
+        },
+    )
+    _persist_standalone_evidence(evidence)
+    data["evidence"] = evidence
+    return data
 
 
 @mcp.tool()
@@ -404,11 +752,23 @@ def compute_risk_windows(
         warnings_active=warnings_active,
         interval_hours=float(interval_hours),
     )
+    evidence = _evidence(
+        "compute_risk_windows",
+        [{"provider": "domain", "dataset": "safe_window_engine"}],
+        query_params={
+            "wave_heights": wave_heights,
+            "wind_speeds": wind_speeds,
+            "start_time": start_time,
+            "interval_hours": interval_hours,
+            "swell_heights": swell_heights,
+            "warning_periods": warning_periods,
+        },
+    )
+    _persist_standalone_evidence(evidence)
     return {
-        "windows": [w.as_dict() for w in windows],
+        "windows": [window.as_dict() for window in windows],
         "count": len(windows),
-        "evidence": _evidence("compute_risk_windows",
-                              [{"provider": "domain", "dataset": "safe_window_engine"}]),
+        "evidence": evidence,
     }
 
 
@@ -462,10 +822,35 @@ def evaluate_safety_clearance(
         require_tide=require_tide,
     )
     out = decision.as_dict()
-    out["evidence"] = _evidence(
+    clearance_warnings = None
+    if out.get("insufficient_data") is True:
+        clearance_warnings = [
+            "SOURCE_GAP: Safety clearance could not be fully evaluated due to missing "
+            "environmental inputs. The model MUST report this as INSUFFICIENT DATA, "
+            "not as safe."
+        ]
+    evidence = _evidence(
         "evaluate_safety_clearance",
         [{"provider": "domain", "dataset": "safety_gate_engine"}],
+        clearance_warnings,
+        query_params={
+            "wave_height": wave_height,
+            "wind_speed": wind_speed,
+            "tide_level": tide_level,
+            "swell_height": swell_height,
+            "wave_period": wave_period,
+            "wind_gust": wind_gust,
+            "rainfall": rainfall,
+            "pressure_trend": pressure_trend,
+            "active_warnings": active_warnings,
+            "cyclone_distance_km": cyclone_distance_km,
+            "restricted_zone_intersections": restricted_zone_intersections,
+            "route_risk_complete": route_risk_complete,
+            "require_tide": require_tide,
+        },
     )
+    _persist_standalone_evidence(evidence)
+    out["evidence"] = evidence
     return out
 
 
@@ -496,17 +881,34 @@ def detect_ocean_anomalies(
         },
         baselines={
             **({"sst": sst_climatology} if sst_climatology is not None else {}),
-            **({"chlorophyll": chlorophyll_climatology} if chlorophyll_climatology is not None else {}),
+            **(
+                {"chlorophyll": chlorophyll_climatology}
+                if chlorophyll_climatology is not None
+                else {}
+            ),
         },
         stds={
             **({"sst": sst_std} if sst_std is not None else {}),
             **({"chlorophyll": chlorophyll_std} if chlorophyll_std is not None else {}),
         } or None,
     )
-    d = result.as_dict()
-    d["evidence"] = _evidence("detect_ocean_anomalies",
-                              [{"provider": "domain", "dataset": "anomaly_engine"}])
-    return d
+    data = result.as_dict()
+    evidence = _evidence(
+        "detect_ocean_anomalies",
+        [{"provider": "domain", "dataset": "anomaly_engine"}],
+        query_params={
+            "sst_current": sst_current,
+            "sst_climatology": sst_climatology,
+            "sst_std": sst_std,
+            "chlorophyll_current": chlorophyll_current,
+            "chlorophyll_climatology": chlorophyll_climatology,
+            "chlorophyll_std": chlorophyll_std,
+            "location_name": location_name,
+        },
+    )
+    _persist_standalone_evidence(evidence)
+    data["evidence"] = evidence
+    return data
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -531,14 +933,32 @@ def plan_safe_route(
     Use this for: "Safest route Mormugao to fishing grounds?",
     "Route from Kochi to deep-sea area?", "Emergency evacuation route?"
     """
+    query_params = {
+        "departure_lat": departure_lat,
+        "departure_lon": departure_lon,
+        "destination_lat": destination_lat,
+        "destination_lon": destination_lon,
+        "vessel_speed_kts": vessel_speed_kts,
+        "check_zones": check_zones,
+    }
     try:
-        with session_scope() as s:
+        with session_scope() as session:
+            intersections: list[dict] = []
+            coverage = geofence.zone_coverage(session)
+            source_states = queries.get_dataset_source_states(
+                session, ("marine_regions_eez_india",)
+            )
             zone_checker = None
             if check_zones:
+
                 def zone_checker(route_geometry):
-                    # ZoneChecker receives a GeoJSON geometry (the route LineString)
-                    # and returns list of intersecting zone dicts
-                    return geofence.find_route_intersections(s, route_geometry)
+                    zone_results = geofence.find_route_intersections(
+                        session, route_geometry
+                    )
+                    intersections.extend(
+                        result for result in zone_results if not result.get("source_gap")
+                    )
+                    return zone_results
 
             result = routing.compute_safe_route(
                 start=(departure_lat, departure_lon),
@@ -546,12 +966,36 @@ def plan_safe_route(
                 vessel_speed_knots=vessel_speed_kts,
                 zone_checker=zone_checker,
             )
+            initial_warnings = list(result.warnings)
+            if not check_zones:
+                initial_warnings.append(
+                    "ZONE_SCREENING_SKIPPED: check_zones=false; route was not screened."
+                )
+            warnings, zone_capability = _zone_outcome(
+                intersections,
+                coverage,
+                source_states,
+                initial_warnings,
+            )
+            capability = "partial" if warnings else zone_capability
+            evidence = _evidence(
+                "plan_safe_route",
+                _sources_from_records(intersections),
+                warnings,
+                record_count=len(intersections),
+                query_params=query_params,
+                capability_status=capability,
+                source_states=source_states,
+            )
+            _persist_evidence(session, evidence, intersections)
     except Exception as exc:
         return _db_error_response("plan_safe_route", exc)
-    d = result.as_dict()
-    d["evidence"] = _evidence("plan_safe_route",
-                              [{"provider": "routing_engine", "dataset": "geodesic_router"}])
-    return d
+    data = result.as_dict()
+    data["warnings"] = warnings
+    data["zone_coverage"] = coverage
+    data["zone_screening"] = "performed" if check_zones else "skipped_by_request"
+    data["evidence"] = evidence
+    return data
 
 
 @mcp.tool()
@@ -568,18 +1012,43 @@ def check_geofence(
     Use this for: "Can I fish at Netrani Island?",
     "Am I inside a restricted zone?", "MPA compliance check?"
     """
+    query_params = {"lat": lat, "lon": lon}
     try:
-        with session_scope() as s:
-            results = geofence.check_point_in_zones(s, lat, lon)
+        with session_scope() as session:
+            raw_results = geofence.check_point_in_zones(session, lat, lon)
+            coverage = geofence.zone_coverage(session)
+            source_states = queries.get_dataset_source_states(
+                session, ("marine_regions_eez_india",)
+            )
+            records = [record for record in raw_results if not record.get("source_gap")]
+            sentinel_warnings = [
+                record["warning"]
+                for record in raw_results
+                if record.get("source_gap") and record.get("warning")
+            ]
+            warnings, capability = _zone_outcome(
+                records,
+                coverage,
+                source_states,
+                sentinel_warnings,
+            )
+            evidence = _evidence(
+                "check_geofence",
+                _sources_from_records(records),
+                warnings,
+                record_count=len(records),
+                query_params=query_params,
+                capability_status=capability,
+                source_states=source_states,
+            )
+            _persist_evidence(session, evidence, records)
     except Exception as exc:
         return _db_error_response("check_geofence", exc)
-    source_gap = any(r.get("status") == "SOURCE_UNAVAILABLE" for r in results)
     return {
-        "data": results,
-        "count": len(results),
-        "evidence": _evidence("check_geofence",
-                              [{"provider": "operator_gis", "dataset": "marine_zones"}],
-                              ["SOURCE_GAP: No marine zones loaded"] if source_gap else None),
+        "data": records,
+        "count": len(records),
+        "coverage": coverage,
+        "evidence": evidence,
     }
 
 
@@ -598,16 +1067,45 @@ def find_nearby_zones(
     "Distance to India-Sri Lanka boundary?",
     "Nearby MPAs within 50 km?"
     """
+    query_params = {"lat": lat, "lon": lon, "radius_km": radius_km}
     try:
-        with session_scope() as s:
-            results = geofence.find_nearby_zones(s, lat, lon, radius_km=radius_km)
+        with session_scope() as session:
+            raw_results = geofence.find_nearby_zones(
+                session, lat, lon, radius_km=radius_km
+            )
+            coverage = geofence.zone_coverage(session)
+            source_states = queries.get_dataset_source_states(
+                session, ("marine_regions_eez_india",)
+            )
+            records = [record for record in raw_results if not record.get("source_gap")]
+            sentinel_warnings = [
+                record["warning"]
+                for record in raw_results
+                if record.get("source_gap") and record.get("warning")
+            ]
+            warnings, capability = _zone_outcome(
+                records,
+                coverage,
+                source_states,
+                sentinel_warnings,
+            )
+            evidence = _evidence(
+                "find_nearby_zones",
+                _sources_from_records(records),
+                warnings,
+                record_count=len(records),
+                query_params=query_params,
+                capability_status=capability,
+                source_states=source_states,
+            )
+            _persist_evidence(session, evidence, records)
     except Exception as exc:
         return _db_error_response("find_nearby_zones", exc)
     return {
-        "data": results,
-        "count": len(results),
-        "evidence": _evidence("find_nearby_zones",
-                              [{"provider": "operator_gis", "dataset": "marine_zones"}]),
+        "data": records,
+        "count": len(records),
+        "coverage": coverage,
+        "evidence": evidence,
     }
 
 
@@ -626,11 +1124,33 @@ def data_health_report() -> dict:
     "Which datasets are stale?"
     """
     try:
-        with session_scope() as s:
-            health = queries.data_health(s)
-            datasets = queries.list_datasets(s)
+        with session_scope() as session:
+            health = queries.data_health(session)
+            datasets = queries.list_datasets(session)
+            evidence = _evidence(
+                "data_health_report",
+                _sources_from_records(health),
+                record_count=len(health),
+                query_params={},
+                source_states=[
+                    {
+                        "dataset": row.get("dataset"),
+                        "state": row.get("last_result_state") or "not_run",
+                        "status": row.get("status"),
+                        "last_checked_at": row.get("last_checked_at"),
+                        "last_success_at": row.get("last_success_at"),
+                        "result_count": row.get("last_result_count"),
+                        "detail": row.get("status_detail"),
+                    }
+                    for row in health
+                ],
+            )
+            _persist_evidence(session, evidence, [])
     except Exception as exc:
         return _db_error_response("data_health_report", exc)
+    from marine_data_engine.config import get_settings
+
+    settings = get_settings()
     return {
         "datasets": datasets,
         "health": health,
@@ -639,8 +1159,14 @@ def data_health_report() -> dict:
             "healthy": sum(1 for h in health if h.get("status") == "healthy"),
             "stale": sum(1 for h in health if h.get("status") == "stale"),
         },
-        "evidence": _evidence("data_health_report",
-                              [{"provider": "marine_data_engine", "dataset": "registry"}]),
+        "ingestion_status": {
+            "live_sources_enabled": settings.service.enable_live_sources,
+            "note": (
+                "When live_sources_enabled is false, no new data is ingested from "
+                "upstream providers. Data may be stale or absent."
+            ),
+        },
+        "evidence": evidence,
     }
 
 
@@ -684,13 +1210,26 @@ def compute_distance_bearing(
     """
     dist_km = haversine_km(from_lat, from_lon, to_lat, to_lon)
     brg = bearing_deg(from_lat, from_lon, to_lat, to_lon)
-    return {
+    data = {
         "distance_km": round(dist_km, 3),
         "distance_nm": round(dist_km / 1.852, 1),
         "bearing_deg": round(brg, 1),
         "from": {"lat": from_lat, "lon": from_lon},
         "to": {"lat": to_lat, "lon": to_lon},
     }
+    evidence = _evidence(
+        "compute_distance_bearing",
+        [{"provider": "domain", "dataset": "geodesic_engine"}],
+        query_params={
+            "from_lat": from_lat,
+            "from_lon": from_lon,
+            "to_lat": to_lat,
+            "to_lon": to_lon,
+        },
+    )
+    _persist_standalone_evidence(evidence)
+    data["evidence"] = evidence
+    return data
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -761,7 +1300,15 @@ def engine_capabilities() -> str:
             "find_nearby_zones", "data_health_report", "get_evidence_trail",
             "compute_distance_bearing",
         ],
-        "data_health": {h.get("dataset", h.get("dataset_id", "?")): h.get("status", "?") for h in health},
+        "data_health": {
+            h.get("dataset", h.get("dataset_id", "?")): h.get("status", "?")
+            for h in health
+        },
+        "data_freshness_note": (
+            "All counts reflect data currently in the database. If counts are 0, no data "
+            "has been ingested for that category. The model must NOT fabricate data for "
+            "empty categories."
+        ),
     }, indent=2)
 
 
@@ -793,7 +1340,8 @@ def fishing_departure_brief(port_name: str, lat: str, lon: str) -> str:
         f"NOT_CLEARED to a go, and quote the returned `reason` codes verbatim.\n"
         f"- State local alert status and regional context separately and explicitly, e.g.:\n"
         f"    Local alert status: no active alert returned within R km of the queried point.\n"
-        f"    Regional/basin context: <other alerts elsewhere>, NOT treated as direct local hazards.\n"
+        f"    Regional/basin context: <other alerts elsewhere>, NOT treated as "
+        f"direct local hazards.\n"
         f"  Never let 'no local alert' imply 'no regional hazard'.\n"
         f"- Treat missing wave/tide data as UNKNOWN risk (not low risk) and say so."
     )

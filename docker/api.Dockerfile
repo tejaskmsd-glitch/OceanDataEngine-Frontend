@@ -45,9 +45,10 @@ WORKDIR /app
 COPY pyproject.toml README.md* ./
 COPY src ./src
 
-# Install runtime + storage extras (boto3 for MinIO/S3), pinned in pyproject.
+# Install runtime, object-storage, and migration dependencies. All deployment
+# tooling is pinned in pyproject so migration execution is network-independent.
 RUN pip install --upgrade "pip==24.3.1" \
-    && pip install ".[storage]"
+    && pip install ".[storage,migrations]"
 
 # Non-root runtime user.
 RUN useradd --create-home --uid 10001 appuser

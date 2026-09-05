@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "All identifiers (e.g. alert_id HWA-2026-09-04-001) are fabricated for tests and must never be treated as real INCOIS high-wave alerts.",
+    "provenance": "synthetic-test-fixture"
+  },
   "provider": "INCOIS",
   "dataset": "incois_hwa",
   "alerts": [

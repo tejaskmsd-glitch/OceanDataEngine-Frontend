@@ -7,11 +7,9 @@ wrapped in the canonical response envelope (requirements §20).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-T = TypeVar("T")
 
 
 class FreshnessModel(BaseModel):
@@ -49,7 +47,7 @@ class Meta(BaseModel):
     confidence: float | None = None
 
 
-class Envelope(BaseModel, Generic[T]):
+class Envelope[T](BaseModel):
     """Canonical response envelope."""
 
     data: T
@@ -89,15 +87,25 @@ class DatasetModel(BaseModel):
     last_success: str | None = None  # dashboard alias
     last_processed_at: datetime | None = None
     last_updated: str | None = None  # dashboard alias
+    last_checked_at: datetime | None = None
+    last_result_count: int | None = None
+    last_result_state: str = "not_run"
+    status_detail: str | None = None
     consecutive_failures: int = 0
 
 
 class DataHealthModel(BaseModel):
     dataset: str
+    dataset_id: str | None = None  # dashboard alias
     provider: str
     status: str
     consecutive_failures: int = 0
     last_success_at: datetime | None = None
+    last_success: str | None = None  # dashboard alias
+    last_checked_at: datetime | None = None
+    last_result_count: int | None = None
+    last_result_state: str = "not_run"
+    status_detail: str | None = None
     freshness: FreshnessModel
 
 
@@ -139,6 +147,10 @@ class DatasetStatusModel(BaseModel):
     expected_update_interval_s: int | None = None
     last_success_at: datetime | None = None
     last_processed_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    last_result_count: int | None = None
+    last_result_state: str = "not_run"
+    status_detail: str | None = None
     consecutive_failures: int = 0
     freshness: FreshnessModel
 
@@ -207,11 +219,14 @@ class EvidenceModel(BaseModel):
     endpoint: str
     query_params: dict[str, Any] = Field(default_factory=dict)
     sources: list[dict[str, Any]] = Field(default_factory=list)
-    record_refs: list[dict[str, Any]] = Field(default_factory=list)
+    record_refs: list[Any] = Field(default_factory=list)
     confidence: float | None = None
     freshness: dict[str, Any] = Field(default_factory=dict)
     quality: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    capability_status: str | None = None
+    data_versions: dict[str, Any] = Field(default_factory=dict)
+    data_lineage: list[dict[str, Any]] = Field(default_factory=list)
     generated_at: datetime
 
 

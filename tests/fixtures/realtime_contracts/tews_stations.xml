@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Synthetic representation of the verified INCOIS TideStations.xml catalog.
+  TEST-ONLY. NOT production data. All station names/coordinates are fabricated.
+-->
+<stations>
+  <station status="reporting">
+    <statname>chnn</statname>
+    <statrealName>Chennai</statrealName>
+    <latitude>13.10</latitude>
+    <longitude>80.30</longitude>
+    <country>India</country>
+    <owner>INCOIS</owner>
+    <colorClass>green</colorClass>
+    <date>2026-Sep-04 11:30</date>
+  </station>
+  <station status="reporting">
+    <statname>vskp</statname>
+    <statrealName>Visakhapatnam</statrealName>
+    <latitude>17.70</latitude>
+    <longitude>83.30</longitude>
+    <country>India</country>
+    <owner>INCOIS</owner>
+    <colorClass>green</colorClass>
+    <date>2026-Sep-04 10:00</date>
+  </station>
+  <station status="notreporting">
+    <statname>okha</statname>
+    <statrealName>Okha</statrealName>
+    <latitude>22.47</latitude>
+    <longitude>69.08</longitude>
+    <country>India</country>
+    <owner>INCOIS</owner>
+    <colorClass>red</colorClass>
+    <date>2026-Sep-01 06:00</date>
+  </station>
+  <station status="reporting">
+    <statname>badcoord</statname>
+    <statrealName>OutOfRange</statrealName>
+    <latitude>999.0</latitude>
+    <longitude>80.0</longitude>
+    <country>India</country>
+    <owner>INCOIS</owner>
+  </station>
+  <station status="reporting">
+    <statname>baddate</statname>
+    <statrealName>BadDate</statrealName>
+    <latitude>15.0</latitude>
+    <longitude>73.0</longitude>
+    <country>India</country>
+    <owner>INCOIS</owner>
+    <date>not-a-real-date</date>
+  </station>
+</stations>

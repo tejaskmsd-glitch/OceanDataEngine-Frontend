@@ -30,8 +30,8 @@ from ..db.models import (
 )
 from ..domain.freshness import compute_freshness
 from ..domain.geo import (
-    geometry_centroid,
     haversine_km,
+    nearest_geometry_distance_km,
     point_in_geometry,
 )
 
@@ -65,6 +65,10 @@ def list_datasets(session: Session) -> list[dict]:
                 "last_success": ds.last_success_at.isoformat() if ds.last_success_at else None,
                 "last_processed_at": ds.last_processed_at,
                 "last_updated": ds.last_processed_at.isoformat() if ds.last_processed_at else None,
+                "last_checked_at": ds.last_checked_at,
+                "last_result_count": ds.last_result_count,
+                "last_result_state": ds.last_result_state or "not_run",
+                "status_detail": ds.status_detail,
                 "consecutive_failures": ds.consecutive_failures,
             }
         )
@@ -94,6 +98,10 @@ def data_health(session: Session, *, default_stale_multiplier: float = 3.0) -> l
                 "consecutive_failures": ds.consecutive_failures,
                 "last_success_at": ds.last_success_at,
                 "last_success": ds.last_success_at.isoformat() if ds.last_success_at else None,
+                "last_checked_at": ds.last_checked_at,
+                "last_result_count": ds.last_result_count,
+                "last_result_state": ds.last_result_state or "not_run",
+                "status_detail": ds.status_detail,
                 "freshness": fr.as_dict(),
             }
         )
@@ -112,17 +120,42 @@ def query_pfz(
     at: datetime | None = None,
     include_expired: bool = False,
 ) -> list[dict]:
-    """Return accepted PFZ advisories within radius, with distance and validity.
+    """Return the latest accepted PFZ source snapshot within radius.
 
-    Distance is centroid-based (portable stand-in for PostGIS polygon distance).
+    Distances are measured to the actual Point/LineString/Polygon geometry.
+    When live rows carry a ``snapshot_name``, older snapshots are excluded so
+    the absence of upstream validity timestamps does not make old advisories
+    appear current forever.
     """
     at = at or _now()
     stmt = select(PFZ).where(PFZ.quality_status != QCStatus.REJECTED.value)
+    rows = list(session.execute(stmt).scalars())
+    snapshot_rows = [
+        row
+        for row in rows
+        if isinstance(row.source_metadata, dict) and row.source_metadata.get("snapshot_name")
+    ]
+    if snapshot_rows:
+        latest_snapshot_row = max(
+            snapshot_rows,
+            key=lambda row: row.retrieved_at or datetime.min.replace(tzinfo=UTC),
+        )
+        latest_snapshot = latest_snapshot_row.source_metadata.get("snapshot_name")
+        rows = [
+            row
+            for row in rows
+            if isinstance(row.source_metadata, dict)
+            and row.source_metadata.get("snapshot_name") == latest_snapshot
+        ]
+
     results: list[dict] = []
-    for pfz in session.execute(stmt).scalars():
-        if pfz.centroid_lat is None or pfz.centroid_lon is None:
+    for pfz in rows:
+        if pfz.geometry is None:
             continue
-        dist = haversine_km(lat, lon, pfz.centroid_lat, pfz.centroid_lon)
+        try:
+            dist = nearest_geometry_distance_km(lat, lon, pfz.geometry)
+        except Exception:  # noqa: BLE001
+            continue
         if dist > radius_km:
             continue
 
@@ -145,8 +178,10 @@ def query_pfz(
                 "advisory_text": pfz.advisory_text,
                 "advisory_type": pfz.advisory_type,
                 "geometry": pfz.geometry,
+                "geometry_type": pfz.geometry.get("type") if pfz.geometry else None,
                 "distance_km": round(dist, 3),
                 "inside": inside,
+                "on_or_inside_geometry": inside,
                 "valid": valid,
                 "issued_at": pfz.issued_at,
                 "issue_time": pfz.issued_at,  # dashboard alias
@@ -158,6 +193,7 @@ def query_pfz(
                 "source": pfz.provider,  # dashboard alias
                 "source_dataset": pfz.source_dataset,
                 "source_url": pfz.source_url,
+                "source_metadata": pfz.source_metadata,
                 "processing_version": pfz.processing_version,
                 "retrieved_at": pfz.retrieved_at,
             }
@@ -242,6 +278,7 @@ def query_alerts(
                 "source": alert.provider,  # dashboard alias
                 "source_dataset": alert.source_dataset,
                 "source_url": alert.source_url,
+                "source_metadata": alert.source_metadata,
                 "processing_version": alert.processing_version,
                 "retrieved_at": alert.retrieved_at,
             }
@@ -254,12 +291,7 @@ def _alert_distance_km(alert: Alert, lat: float, lon: float) -> float | None:
     if alert.geometry is None:
         return None
     try:
-        if point_in_geometry(lat, lon, alert.geometry):
-            return 0.0
-        from ..domain.geo import geometry_centroid
-
-        clat, clon = geometry_centroid(alert.geometry)
-        return haversine_km(lat, lon, clat, clon)
+        return nearest_geometry_distance_km(lat, lon, alert.geometry)
     except Exception:  # noqa: BLE001
         return None
 
@@ -367,9 +399,52 @@ def get_dataset_status(
         "expected_update_interval_s": ds.expected_update_interval_s,
         "last_success_at": ds.last_success_at,
         "last_processed_at": ds.last_processed_at,
+        "last_checked_at": ds.last_checked_at,
+        "last_result_count": ds.last_result_count,
+        "last_result_state": ds.last_result_state or "not_run",
+        "status_detail": ds.status_detail,
         "consecutive_failures": ds.consecutive_failures,
         "freshness": fr.as_dict(),
     }
+
+
+def get_dataset_source_states(session: Session, keys: tuple[str, ...]) -> list[dict]:
+    """Return machine-readable source outcomes for evidence/gap reporting."""
+    if not keys:
+        return []
+    rows = session.execute(
+        select(Dataset, Source).join(Source).where(Dataset.key.in_(keys))
+    ).all()
+    by_key = {dataset.key: (dataset, source) for dataset, source in rows}
+    states: list[dict] = []
+    for key in keys:
+        row = by_key.get(key)
+        if row is None:
+            states.append(
+                {
+                    "dataset": key,
+                    "state": "not_registered",
+                    "status": "disabled",
+                    "last_checked_at": None,
+                    "result_count": None,
+                    "detail": "dataset is not registered",
+                }
+            )
+            continue
+        dataset, source = row
+        states.append(
+            {
+                "dataset": key,
+                "provider": source.code,
+                "state": dataset.last_result_state or "not_run",
+                "status": dataset.status,
+                "last_checked_at": dataset.last_checked_at,
+                "last_success_at": dataset.last_success_at,
+                "result_count": dataset.last_result_count,
+                "detail": dataset.status_detail,
+            }
+        )
+    return states
 
 
 # --------------------------------------------------------------------------- #
@@ -391,6 +466,9 @@ def get_evidence(session: Session, request_id: str) -> dict | None:
         "freshness": ev.freshness,
         "quality": ev.quality,
         "warnings": ev.warnings,
+        "capability_status": ev.capability_status,
+        "data_versions": ev.data_versions,
+        "data_lineage": ev.data_lineage,
         "generated_at": ev.generated_at,
     }
 
@@ -407,6 +485,9 @@ def save_evidence(
     freshness: dict,
     quality: dict,
     warnings: list,
+    capability_status: str | None = None,
+    data_versions: dict | None = None,
+    data_lineage: list | None = None,
 ) -> None:
     session.add(
         Evidence(
@@ -419,6 +500,9 @@ def save_evidence(
             freshness=freshness,
             quality=quality,
             warnings=warnings,
+            capability_status=capability_status,
+            data_versions=data_versions or {},
+            data_lineage=data_lineage or [],
         )
     )
 
@@ -477,6 +561,7 @@ def _observation_to_dict(obs: Observation, distance_km: float | None) -> dict:
         "longitude": obs.longitude,
         "station_id": obs.station_id,
         "station_type": obs.station_type,
+        "sensor_id": obs.sensor_id,
         "distance_km": round(distance_km, 3) if distance_km is not None else None,
         "observed_at": obs.observed_at,
         "issued_at": obs.issued_at,
@@ -488,6 +573,7 @@ def _observation_to_dict(obs: Observation, distance_km: float | None) -> dict:
         "provider": obs.provider,
         "source_dataset": obs.source_dataset,
         "source_url": obs.source_url,
+        "source_metadata": obs.source_metadata,
         "processing_version": obs.processing_version,
     }
 
@@ -518,6 +604,7 @@ def query_observations(
         window = timedelta(hours=24)
         stmt = stmt.where(Observation.observed_at >= at - window)
         stmt = stmt.where(Observation.observed_at <= at + window)
+    stmt = stmt.order_by(Observation.observed_at.desc())
     out: list[dict] = []
     for obs in session.execute(stmt).scalars():
         distance = None
@@ -558,6 +645,7 @@ def _forecast_to_dict(fc: Forecast, distance_km: float | None) -> dict:
         "provider": fc.provider,
         "source_dataset": fc.source_dataset,
         "source_url": fc.source_url,
+        "source_metadata": fc.source_metadata,
         "processing_version": fc.processing_version,
     }
 
@@ -584,6 +672,7 @@ def query_forecasts(
         window = timedelta(hours=24)
         stmt = stmt.where(Forecast.valid_from >= at - window)
         stmt = stmt.where(Forecast.valid_from <= at + window)
+    stmt = stmt.order_by(Forecast.valid_from.asc())
     out: list[dict] = []
     for fc in session.execute(stmt).scalars():
         distance = None
@@ -621,11 +710,7 @@ def query_advisories(
         distance = None
         if lat is not None and lon is not None and adv.geometry is not None:
             try:
-                if point_in_geometry(lat, lon, adv.geometry):
-                    distance = 0.0
-                else:
-                    clat, clon = geometry_centroid(adv.geometry)
-                    distance = haversine_km(lat, lon, clat, clon)
+                distance = nearest_geometry_distance_km(lat, lon, adv.geometry)
             except Exception:  # noqa: BLE001
                 distance = None
             if radius_km is not None and distance is not None and distance > radius_km:
@@ -647,6 +732,7 @@ def query_advisories(
                 "provider": adv.provider,
                 "source_dataset": adv.source_dataset,
                 "source_url": adv.source_url,
+                "source_metadata": adv.source_metadata,
                 "processing_version": adv.processing_version,
             }
         )
@@ -671,15 +757,25 @@ def _zone_to_dict(zone: MarineZone, *, distance_km: float | None, inside: bool |
         "effective_from": zone.effective_from,
         "effective_until": zone.effective_until,
         "source": zone.source,
+        "source_dataset": zone.source_dataset,
         "source_url": zone.source_url,
+        "retrieved_at": zone.retrieved_at,
+        "source_metadata": zone.source_metadata,
     }
 
 
-def query_zones_containing_point(session: Session, *, lat: float, lon: float) -> list[dict]:
-    """Return marine zones whose polygon contains the point (point-in-polygon)."""
+def _zone_effective(zone: MarineZone, at: datetime) -> bool:
+    return _within_validity(zone.effective_from, zone.effective_until, at) is not False
+
+
+def query_zones_containing_point(
+    session: Session, *, lat: float, lon: float, at: datetime | None = None
+) -> list[dict]:
+    """Return currently effective marine zones covering the point."""
+    at = at or _now()
     out: list[dict] = []
     for zone in session.execute(select(MarineZone)).scalars():
-        if zone.geometry is None:
+        if zone.geometry is None or not _zone_effective(zone, at):
             continue
         try:
             inside = point_in_geometry(lat, lon, zone.geometry)
@@ -691,21 +787,22 @@ def query_zones_containing_point(session: Session, *, lat: float, lon: float) ->
 
 
 def query_zones_nearby(
-    session: Session, *, lat: float, lon: float, radius_km: float
+    session: Session,
+    *,
+    lat: float,
+    lon: float,
+    radius_km: float,
+    at: datetime | None = None,
 ) -> list[dict]:
-    """Return marine zones within ``radius_km`` (centroid distance stand-in)."""
+    """Return currently effective zones by nearest source-geometry distance."""
+    at = at or _now()
     out: list[dict] = []
     for zone in session.execute(select(MarineZone)).scalars():
-        if zone.geometry is None:
+        if zone.geometry is None or not _zone_effective(zone, at):
             continue
         try:
-            if point_in_geometry(lat, lon, zone.geometry):
-                distance = 0.0
-                inside = True
-            else:
-                clat, clon = geometry_centroid(zone.geometry)
-                distance = haversine_km(lat, lon, clat, clon)
-                inside = False
+            distance = nearest_geometry_distance_km(lat, lon, zone.geometry)
+            inside = point_in_geometry(lat, lon, zone.geometry)
         except Exception:  # noqa: BLE001
             continue
         if distance > radius_km:
@@ -715,9 +812,13 @@ def query_zones_nearby(
     return out
 
 
-def query_zones_intersecting(session: Session, *, geometry: dict) -> list[dict]:
-    """Return marine zones intersecting the supplied GeoJSON geometry."""
+def query_zones_intersecting(
+    session: Session, *, geometry: dict, at: datetime | None = None
+) -> list[dict]:
+    """Return currently effective zones intersecting supplied GeoJSON."""
     from ..domain.geo import load_geometry
+
+    at = at or _now()
 
     try:
         probe = load_geometry(geometry)
@@ -726,7 +827,7 @@ def query_zones_intersecting(session: Session, *, geometry: dict) -> list[dict]:
 
     out: list[dict] = []
     for zone in session.execute(select(MarineZone)).scalars():
-        if zone.geometry is None:
+        if zone.geometry is None or not _zone_effective(zone, at):
             continue
         try:
             zgeom = load_geometry(zone.geometry)

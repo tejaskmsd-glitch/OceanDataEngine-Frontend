@@ -13,10 +13,11 @@ ERDDAP JSON responses use a tabular envelope::
 For the catalog, each row describes one dataset; the ``Dataset ID`` column is
 the stable identifier and ``Title`` the human-readable name.
 
-TLS note (source_mapping V3-TLS): the INCOIS endpoint has historically omitted
-an intermediate certificate. We build an SSL context from the ``certifi`` CA
-bundle (never disabling verification). If ``certifi`` is unavailable we fall
-back to the system default context and log a warning — verification stays ON.
+TLS note (source_mapping V3-TLS): some INCOIS endpoints omit their
+intermediate certificate. We augment the system trust store with the verified,
+bundled GlobalSign RSA OV SSL CA 2018 intermediate (never disabling hostname or
+certificate verification). Operators may add a bundle through
+``INCOIS_CA_BUNDLE``.
 
 Like every source in this package, the live connector is DISABLED by default
 and only performs network I/O when ``enable_live_sources`` is true. Tests use
@@ -26,7 +27,6 @@ the fixture adapter and never touch the network.
 from __future__ import annotations
 
 import json
-import logging
 import ssl
 import urllib.error
 import urllib.request
@@ -34,9 +34,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..config import get_settings
+from ..tls import build_incois_ssl_context
 from .base import FetchResult, LiveSourceDisabledError, RawPayload
-
-logger = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT_S = 15
 _USER_AGENT = "marine-data-engine/0.1 (+ingest)"
@@ -58,22 +57,8 @@ class ErddapDataset:
 
 
 def _build_ssl_context() -> ssl.SSLContext:
-    """Return a verifying SSL context, preferring the certifi CA bundle.
-
-    Never disables verification. If certifi cannot be loaded we fall back to
-    the platform default verifying context and emit a warning.
-    """
-    try:
-        import certifi
-
-        return ssl.create_default_context(cafile=certifi.where())
-    except Exception as exc:  # pragma: no cover - defensive, certifi is pinned
-        logger.warning(
-            "certifi CA bundle unavailable (%s); using system default verifying "
-            "SSL context. TLS verification remains ENABLED.",
-            exc,
-        )
-        return ssl.create_default_context()
+    """Compatibility wrapper around the shared verification-enforcing context."""
+    return build_incois_ssl_context()
 
 
 def parse_catalog(catalog_bytes: bytes) -> list[ErddapDataset]:
@@ -157,17 +142,18 @@ INCOISErddapFixtureAdapter = INCOISErddapCatalogAdapter
 class INCOISErddapLiveAdapter:
     """Live INCOIS ERDDAP connector — DISABLED unless explicitly enabled.
 
-    Fetches the catalog (and optionally per-dataset info) over HTTPS using a
-    verifying SSL context built from the certifi bundle. Network I/O only runs
+    Fetches the catalog (and optionally per-dataset info) over HTTPS using the
+    shared verification-enforcing INCOIS TLS context. Network I/O only runs
     when ``enable_live_sources`` is true.
     """
 
     provider = "INCOIS"
     dataset = "incois_erddap"
 
-    def __init__(self, base_url: str | None = None) -> None:
+    def __init__(self, base_url: str | None = None, *, dataset_id: str | None = None) -> None:
         self.live_enabled = get_settings().service.enable_live_sources
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
+        self.dataset_id = dataset_id
         self._ssl_context = _build_ssl_context()
 
     def _http_get(self, url: str) -> bytes:
@@ -208,7 +194,12 @@ class INCOISErddapLiveAdapter:
 
     def fetch(self) -> FetchResult:
         self._require_enabled()
-        url = f"{self.base_url}{CATALOG_PATH}"
+        path = (
+            DATASET_INFO_PATH.format(dataset_id=self.dataset_id)
+            if self.dataset_id
+            else CATALOG_PATH
+        )
+        url = f"{self.base_url}{path}"
         try:
             body = self._http_get(url)
         except (urllib.error.URLError, ssl.SSLError, OSError, TimeoutError) as exc:

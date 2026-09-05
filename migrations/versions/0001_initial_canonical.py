@@ -182,7 +182,10 @@ def upgrade() -> None:
             CONSTRAINT uq_dataset_asset_uri UNIQUE (dataset_id, storage_uri)
         );
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS ix_dataset_asset_dataset_id ON dataset_asset (dataset_id);")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_dataset_asset_dataset_id "
+        "ON dataset_asset (dataset_id);"
+    )
 
     # --------------------------------------------------------------------- #
     # Environmental records
@@ -355,7 +358,10 @@ def upgrade() -> None:
         );
     """)
     op.execute("CREATE INDEX IF NOT EXISTS ix_marine_zone_zone_type ON marine_zone (zone_type);")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_marine_zone_geometry ON marine_zone USING GIST (geometry);")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_marine_zone_geometry "
+        "ON marine_zone USING GIST (geometry);"
+    )
 
     # --------------------------------------------------------------------- #
     # Processing / lineage entities
@@ -379,8 +385,14 @@ def upgrade() -> None:
             finished_at     TIMESTAMPTZ
         );
     """)
-    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_ingestion_job_job_uid ON ingestion_job (job_uid);")
-    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_ingestion_job_idem ON ingestion_job (idempotency_key);")
+    op.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_ingestion_job_job_uid "
+        "ON ingestion_job (job_uid);"
+    )
+    op.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_ingestion_job_idem "
+        "ON ingestion_job (idempotency_key);"
+    )
     op.execute("CREATE INDEX IF NOT EXISTS ix_ingestion_job_status ON ingestion_job (status);")
 
     # Now that ingestion_job exists, wire the deferred FK from dataset_asset.
@@ -412,8 +424,14 @@ def upgrade() -> None:
             finished_at      TIMESTAMPTZ
         );
     """)
-    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_processing_job_job_uid ON processing_job (job_uid);")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_processing_job_job_type ON processing_job (job_type);")
+    op.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_processing_job_job_uid "
+        "ON processing_job (job_uid);"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_processing_job_job_type "
+        "ON processing_job (job_type);"
+    )
     op.execute("CREATE INDEX IF NOT EXISTS ix_processing_job_status ON processing_job (status);")
 
     # ---- processing_run --------------------------------------------------
@@ -436,7 +454,10 @@ def upgrade() -> None:
             finished_at         TIMESTAMPTZ
         );
     """)
-    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_processing_run_run_uid ON processing_run (run_uid);")
+    op.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_processing_run_run_uid "
+        "ON processing_run (run_uid);"
+    )
 
     # ---- evidence --------------------------------------------------------
     op.execute("""

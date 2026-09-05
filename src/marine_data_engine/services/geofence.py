@@ -14,11 +14,13 @@ empty result annotated with a ``SOURCE_GAP`` warning so callers never mistake
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db.models import MarineZone
-from ..domain.geo import geometry_centroid, haversine_km, load_geometry, point_in_geometry
+from ..domain.geo import load_geometry, nearest_geometry_distance_km, point_in_geometry
 
 SOURCE_GAP_NO_ZONES = (
     "SOURCE_GAP: no marine zones are loaded; geofence checks are inconclusive. "
@@ -43,7 +45,50 @@ def _zone_summary(zone: MarineZone, *, distance_km: float | None, inside: bool |
         "effective_from": zone.effective_from,
         "effective_until": zone.effective_until,
         "source": zone.source,
+        "source_dataset": zone.source_dataset,
         "source_url": zone.source_url,
+        "retrieved_at": zone.retrieved_at,
+        "source_metadata": zone.source_metadata,
+    }
+
+
+def _effective(zone: MarineZone, at: datetime) -> bool:
+    start = zone.effective_from
+    end = zone.effective_until
+    if start is not None:
+        start = start if start.tzinfo else start.replace(tzinfo=UTC)
+        if at < start:
+            return False
+    if end is not None:
+        end = end if end.tzinfo else end.replace(tzinfo=UTC)
+        if at > end:
+            return False
+    return True
+
+
+def zone_coverage(session: Session) -> dict:
+    """Report loaded authoritative coverage independently by zone category."""
+    groups = {
+        "eez_boundary": {"eez", "boundary", "international_boundary"},
+        "marine_protected_area": {"mpa", "marine_protected_area", "protected"},
+        "restricted_area": {"restricted", "no_fishing", "exclusion"},
+        "naval_firing_area": {"naval", "firing_range", "naval_firing_range"},
+    }
+    counts = {name: 0 for name in groups}
+    now = datetime.now(tz=UTC)
+    for zone in session.execute(select(MarineZone)).scalars():
+        if not _effective(zone, now):
+            continue
+        normalized = (zone.zone_type or "").strip().lower()
+        for name, aliases in groups.items():
+            if normalized in aliases:
+                counts[name] += 1
+    return {
+        name: {
+            "status": "available" if count else "not_loaded",
+            "feature_count": count,
+        }
+        for name, count in counts.items()
     }
 
 
@@ -57,8 +102,9 @@ def check_point_in_zones(session: Session, lat: float, lon: float) -> list[dict]
         return [{"warning": SOURCE_GAP_NO_ZONES, "source_gap": True}]
 
     out: list[dict] = []
+    now = datetime.now(tz=UTC)
     for zone in session.execute(select(MarineZone)).scalars():
-        if zone.geometry is None:
+        if zone.geometry is None or not _effective(zone, now):
             continue
         try:
             if point_in_geometry(lat, lon, zone.geometry):
@@ -71,25 +117,20 @@ def check_point_in_zones(session: Session, lat: float, lon: float) -> list[dict]
 def find_nearby_zones(session: Session, lat: float, lon: float, radius_km: float) -> list[dict]:
     """Return marine zones within ``radius_km`` (containment => distance 0).
 
-    Distance uses point-in-polygon first, then a centroid haversine stand-in for
-    PostGIS polygon distance. Sorted nearest-first. Returns a ``SOURCE_GAP``
-    sentinel when no zones are loaded.
+    Distance uses the nearest point on the actual source geometry. Sorted
+    nearest-first. Returns a ``SOURCE_GAP`` sentinel when no zones are loaded.
     """
     if not _zones_loaded(session):
         return [{"warning": SOURCE_GAP_NO_ZONES, "source_gap": True}]
 
     out: list[dict] = []
+    now = datetime.now(tz=UTC)
     for zone in session.execute(select(MarineZone)).scalars():
-        if zone.geometry is None:
+        if zone.geometry is None or not _effective(zone, now):
             continue
         try:
-            if point_in_geometry(lat, lon, zone.geometry):
-                distance = 0.0
-                inside = True
-            else:
-                clat, clon = geometry_centroid(zone.geometry)
-                distance = haversine_km(lat, lon, clat, clon)
-                inside = False
+            distance = nearest_geometry_distance_km(lat, lon, zone.geometry)
+            inside = point_in_geometry(lat, lon, zone.geometry)
         except Exception:  # noqa: BLE001
             continue
         if distance > radius_km:
@@ -115,8 +156,9 @@ def find_route_intersections(session: Session, geometry: dict) -> list[dict]:
         return [{"warning": SOURCE_GAP_NO_ZONES, "source_gap": True}]
 
     out: list[dict] = []
+    now = datetime.now(tz=UTC)
     for zone in session.execute(select(MarineZone)).scalars():
-        if zone.geometry is None:
+        if zone.geometry is None or not _effective(zone, now):
             continue
         try:
             zgeom = load_geometry(zone.geometry)

@@ -216,15 +216,18 @@ def compute_safe_route(
     intersecting: list[dict] = []
     if zone_checker is not None:
         try:
-            intersecting = [z for z in zone_checker(geometry) if not z.get("source_gap")]
+            zone_results = zone_checker(geometry)
+            if any(zone.get("source_gap") for zone in zone_results):
+                warnings.append(
+                    "SOURCE_GAP: no marine zones loaded; route not screened for zones"
+                )
+            intersecting = [zone for zone in zone_results if not zone.get("source_gap")]
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"zone check failed: {exc}")
-        for z in intersecting:
-            name = z.get("name") or z.get("zone_uid")
+        for zone in intersecting:
+            name = zone.get("name") or zone.get("zone_uid")
             if name and name not in avoided_zones:
                 avoided_zones.append(name)
-        if any(z.get("source_gap") for z in (intersecting or [])):
-            warnings.append("SOURCE_GAP: no marine zones loaded; route not screened for zones")
 
     segments: list[RouteSegment] = []
     driver_totals: dict[str, float] = {}

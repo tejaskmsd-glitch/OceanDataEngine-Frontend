@@ -1,0 +1,6 @@
+[
+  {"_comment": "TEST-ONLY synthetic OON moored-buoy catalog (fetchMooredBuoyData.jsp).",
+   "buoyId": "BD08", "type": "OMNI", "status": "new", "latitude": "18.0", "longitude": "88.0"},
+  {"buoyId": "BD11", "type": "MORED", "status": "new", "latitude": "10.5", "longitude": "72.5"},
+  {"buoyId": "BD09", "type": "OMNI", "status": "old", "latitude": "12.0", "longitude": "90.0"}
+]

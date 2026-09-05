@@ -35,7 +35,9 @@ x-common-env: &common-env
   MDE_S3_RAW_BUCKET: ${S3_BUCKET_RAW:-marine-raw}
   MDE_S3_IN_MEMORY: "false"
   MDE_NATS_SERVERS: ${NATS_URL}
-  MDE_ENABLE_LIVE_SOURCES: "false"
+  MDE_ENABLE_LIVE_SOURCES: ${MDE_ENABLE_LIVE_SOURCES:-true}
+  INCOIS_CA_BUNDLE: ${INCOIS_CA_BUNDLE:-}
+  MARINE_REGIONS_LICENSE_ACKNOWLEDGEMENT: ${MARINE_REGIONS_LICENSE_ACKNOWLEDGEMENT:-}
   MDE_LOG_JSON: "true"
   # REDIS_URL reserved for future use if needed
   NATS_URL: ${NATS_URL}
@@ -155,10 +157,13 @@ services:
       - "127.0.0.1:14318:4318"   # OTLP HTTP
       - "127.0.0.1:18889:8889"   # Prometheus exporter (collector metrics)
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:13133/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
+      # The pinned collector image is distroless (no /bin/sh, wget, or curl).
+      # Main-process liveness is enforced by Docker; this shell-free command
+      # verifies that the running image can still load the mounted pipeline.
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol/config.yaml"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 15s
 
   # ---------------------------------------------------------------------------
@@ -320,7 +325,7 @@ services:
       <<: *common-env
       AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
       AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-false}
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-false}
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: ${AIRFLOW__WEBSERVER__EXPOSE_CONFIG:-false}

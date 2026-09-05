@@ -144,13 +144,20 @@ synchronous API requests (prompt §4).
 
 | DAG | Schedule | Purpose | Verification |
 |---|---|---|---|
-| `imd_cap_alerts_poll` | every 1 min | Trigger IMD CAP alert ingest | **VERIFIED** (P0) |
-| `incois_erddap_ingest` | every 6 h | Trigger per-dataset ERDDAP ingest (16 IDs) | CATALOG VERIFIED (P0) |
-| `mosdac_search_registry` | every 12 h | Discovery → registry (downloads blocked, AUTH-A) | SEARCH VERIFIED (P0-support) |
+| `imd_cap_alerts_poll` | every 1 min | Trigger IMD CAP alert ingest | endpoint/parser verified |
+| `incois_hwa_swell_poll` | every 15 min | Trigger INCOIS HWA/SSA + district geometry ingest | live contract verified |
+| `incois_pfz_poll` | every 3 h | Trigger native PFZ Point + LineString ingest | live contract verified |
+| `incois_tews_tide_poll` | every 10 min | Enumerate TEWS stations and ingest explicit latest sensor values | live contract verified |
+| `incois_oon_buoy_poll` | twice hourly | Enumerate active OON stations and ingest strict wave/wind chart values | live contract verified |
+| `incois_erddap_ingest` | every 6 h | Trigger per-dataset ERDDAP metadata ingest | catalog verified |
+| `mosdac_search_registry` | every 12 h | Discovery → registry (downloads excluded) | search verified |
 | `dataset_freshness_sweep` | every 5 min | Recompute dataset freshness/staleness | platform |
 
-DAGs are paused at creation (`AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true`);
-unpause in the Airflow UI when the corresponding worker connectors are ready.
+Verified live DAGs are unpaused at creation by default. Set
+`AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true` or
+`MDE_ENABLE_LIVE_SOURCES=false` for a deliberately disabled deployment. IMD
+numeric NWP has no schedule because its numeric endpoint/auth/schema contract is
+unavailable. Marine Regions EEZ has no schedule while license approval is gated.
 
 ---
 
@@ -174,8 +181,11 @@ All configuration lives in `.env` (copied from `.env.example`, git-ignored).
 corresponding connectors disabled until verified access is obtained — see
 [`SOURCE_GAPS.md`](./SOURCE_GAPS.md).
 
-INCOIS ERDDAP requires bundling the **GlobalSign intermediate CA**
-(`INCOIS_CA_BUNDLE`); never disable TLS verification (source_mapping V3-TLS).
+INCOIS hosts that omit their intermediate certificate are handled by augmenting
+the platform trust store with the bundled **GlobalSign RSA OV SSL CA 2018**
+intermediate. `INCOIS_CA_BUNDLE` can add an operator-managed PEM bundle;
+hostname and certificate verification are never disabled (source_mapping
+V3-TLS).
 
 ---
 
@@ -192,8 +202,15 @@ INCOIS ERDDAP requires bundling the **GlobalSign intermediate CA**
 
 ## Source limitations
 
-Live/authenticated source access is **not** fully verified. The PFZ machine
-geometry (INCOIS `PfzAdvisory`) is an **entry-page-only** source pending
-**HAR-A** capture and is a **P0 prerequisite, not a shippable connector**. Full
-details of every source gap and the exact verification action required are in
-[`SOURCE_GAPS.md`](./SOURCE_GAPS.md).
+Live PFZ, HWA/SSA, TEWS tide observations, and dynamically enumerated INCOIS OON
+buoy wave/wind observations have verified production adapters and schedules.
+Production never falls back to fixtures, and healthy empty polls remain empty.
+
+Two deliberate gates remain: IMD numeric marine NWP is
+`contract_unavailable` (no verified numeric endpoint/schema/auth-header
+contract), and Marine Regions India EEZ ingestion is `license_gated` pending an
+operator-reviewed permission/attribution reference. Marine protected,
+restricted, naval, and firing-range geometry remains independently unavailable;
+EEZ coverage never implies those categories are loaded. See
+[`SOURCE_GAPS.md`](./SOURCE_GAPS.md) for exact endpoint, provenance, and state
+semantics.

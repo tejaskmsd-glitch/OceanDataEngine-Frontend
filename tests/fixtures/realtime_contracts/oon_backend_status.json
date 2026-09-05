@@ -1,0 +1,6 @@
+[
+  {"_comment": "TEST-ONLY synthetic OON backend_process.jsp marker response. 'time' is UTC.",
+   "buoy_id": "BD08", "time": "__BD08_OLD__", "category": "moored", "lat": 18.0, "lon": 88.0},
+  {"buoy_id": "BD08", "time": "__BD08_NEW__", "category": "moored", "lat": 18.01, "lon": 88.02},
+  {"buoy_id": "BD11", "time": "__BD11__", "category": "moored", "lat": 10.5, "lon": 72.5}
+]

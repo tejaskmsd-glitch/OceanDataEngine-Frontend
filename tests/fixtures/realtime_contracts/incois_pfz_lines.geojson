@@ -1,0 +1,32 @@
+{
+  "_fixture_metadata": {
+    "synthetic": true,
+    "test_only": true,
+    "purpose": "Synthetic representation of the verified INCOIS /api/ws/pfzLines LineString FeatureCollection. NOT production data.",
+    "warning": "The second line carries Year=2025 which deliberately conflicts with the 2026 snapshot name to exercise conflict flagging without geometry mutation.",
+    "provenance": "synthetic-test-fixture"
+  },
+  "type": "FeatureCollection",
+  "name": "04Sep2026",
+  "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+  "features": [
+    {
+      "type": "Feature",
+      "id": 11,
+      "properties": {"UID": 5001, "SECTORNAME": "Karnataka North", "Year": 2026},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[74.2, 13.1], [74.35, 13.2], [74.5, 13.3]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 12,
+      "properties": {"UID": 5002, "SECTORNAME": "Maharashtra South", "Year": 2025},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[72.8, 16.8], [72.9, 16.95], [73.05, 17.1]]
+      }
+    }
+  ]
+}

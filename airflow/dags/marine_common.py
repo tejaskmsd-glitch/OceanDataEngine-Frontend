@@ -16,8 +16,8 @@ from typing import Any
 def publish_ingest_trigger(subject: str, payload: dict[str, Any]) -> None:
     """Publish an ingest trigger to NATS JetStream.
 
-    Falls back to logging when nats-py is unavailable so DAG parsing never
-    breaks the scheduler. Real delivery happens when the worker/NATS stack is up.
+    Raises after bounded retries when NATS or nats-py is unavailable so Airflow
+    marks the task failed; a trigger is never logged as though it were delivered.
     """
     nats_url = os.environ.get("MARINE_NATS_URL") or os.environ.get("NATS_URL", "nats://nats:4222")
     body = json.dumps(payload).encode("utf-8")
@@ -26,7 +26,7 @@ def publish_ingest_trigger(subject: str, payload: dict[str, Any]) -> None:
         import asyncio
 
         import nats  # type: ignore
-        import nats.errors # type: ignore
+        import nats.errors  # type: ignore
 
         async def _send() -> None:
             nc = await nats.connect(nats_url, connect_timeout=5)

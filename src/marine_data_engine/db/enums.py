@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class QCStatus(str, Enum):
+class QCStatus(StrEnum):
     """Quality-control disposition for a record."""
 
     ACCEPTED = "accepted"
@@ -14,7 +14,7 @@ class QCStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
-class DatasetStatus(str, Enum):
+class DatasetStatus(StrEnum):
     """Operational status of a registered dataset."""
 
     HEALTHY = "healthy"
@@ -24,7 +24,7 @@ class DatasetStatus(str, Enum):
     DISABLED = "disabled"
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     """Lifecycle status for ingestion/processing jobs."""
 
     QUEUED = "queued"
@@ -36,7 +36,7 @@ class JobStatus(str, Enum):
     DEAD_LETTER = "dead_letter"
 
 
-class QueuePriority(str, Enum):
+class QueuePriority(StrEnum):
     """Priority isolation classes for the work queue.
 
     Ordered from most to least urgent. Critical alerts must never be blocked
@@ -50,7 +50,7 @@ class QueuePriority(str, Enum):
     BACKFILL_ARCHIVE = "backfill_archive"
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     """Normalized alert severity (CAP-aligned)."""
 
     UNKNOWN = "unknown"
@@ -60,7 +60,7 @@ class Severity(str, Enum):
     EXTREME = "extreme"
 
 
-class Certainty(str, Enum):
+class Certainty(StrEnum):
     """Normalized CAP certainty."""
 
     UNKNOWN = "unknown"
@@ -70,7 +70,7 @@ class Certainty(str, Enum):
     OBSERVED = "observed"
 
 
-class Urgency(str, Enum):
+class Urgency(StrEnum):
     """Normalized CAP urgency."""
 
     UNKNOWN = "unknown"

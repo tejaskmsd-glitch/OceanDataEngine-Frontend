@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-
 from marine_common import publish_ingest_trigger
 
 ERDDAP_BASE = "https://erddap.incois.gov.in/erddap"
@@ -47,7 +46,7 @@ ERDDAP_DATASET_IDS = [
     dagrun_timeout=pendulum.duration(minutes=30),
     tags=["marine", "incois", "erddap", "P0"],
     default_args={
-        "retries": 3, 
+        "retries": 3,
         "retry_delay": pendulum.duration(minutes=2),
         "execution_timeout": pendulum.duration(minutes=10),
     },

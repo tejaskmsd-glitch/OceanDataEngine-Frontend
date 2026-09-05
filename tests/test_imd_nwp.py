@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from marine_data_engine.sources.base import (
-    AuthenticationRequiredError,
     LiveSourceDisabledError,
+    SourceContractUnavailableError,
 )
 from marine_data_engine.sources.imd_nwp import (
     IMDNwpAdapter,
@@ -51,10 +51,17 @@ def test_live_adapter_disabled_by_default():
         IMDNwpAdapter().fetch()
 
 
-def test_live_adapter_requires_token_when_enabled():
+def test_live_adapter_fails_closed_when_enabled():
+    """The rewritten numeric IMD NWP connector has no verified live contract.
+
+    When live sources are enabled it must fail closed with
+    ``SourceContractUnavailableError`` (no verified endpoint/schema, HTTP 401 on
+    documented bulletins) rather than guessing a bearer token or fabricating a
+    numeric forecast.
+    """
     adapter = IMDNwpAdapter(token="")
     adapter.live_enabled = True
-    with pytest.raises(AuthenticationRequiredError):
+    with pytest.raises(SourceContractUnavailableError):
         adapter.fetch()
-    with pytest.raises(AuthenticationRequiredError):
+    with pytest.raises(SourceContractUnavailableError):
         adapter.fetch_marine_forecast()

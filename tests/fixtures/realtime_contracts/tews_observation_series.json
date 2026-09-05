@@ -1,0 +1,33 @@
+[
+  {
+    "_comment": "TEST-ONLY synthetic TEWS per-station series. Malformed x-values in 'data' are intentional and MUST be ignored; only lastReportedDate/lastreportedvalue are parsed.",
+    "name": "RAD",
+    "lastReportedDate": "__RAD_TIME__",
+    "lastreportedvalue": 1.234,
+    "data": [["bad-x-0", 1.20], ["bad-x-1", 1.23], ["not-an-epoch", 1.234]]
+  },
+  {
+    "name": "PRS",
+    "lastReportedDate": "__PRS_TIME__",
+    "lastreportedvalue": 1.187,
+    "data": [[null, 1.18], ["NaN", 1.19]]
+  },
+  {
+    "name": "ENC",
+    "lastReportedDate": "__ENC_TIME__",
+    "lastreportedvalue": "not-a-number",
+    "data": [["x", "y"]]
+  },
+  {
+    "name": "Predicted",
+    "lastReportedDate": "__RAD_TIME__",
+    "lastreportedvalue": 1.5,
+    "data": []
+  },
+  {
+    "name": "Residual",
+    "lastReportedDate": "__RAD_TIME__",
+    "lastreportedvalue": 0.1,
+    "data": []
+  }
+]

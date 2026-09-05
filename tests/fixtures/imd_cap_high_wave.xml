@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SYNTHETIC TEST FIXTURE - NOT PRODUCTION DATA.
+  This CAP document is fabricated for offline deterministic tests.
+  The identifier (IMD-CAP-FIXTURE-0001) and all content must never be
+  treated as a real IMD CAP alert. provenance: synthetic-test-fixture
+-->
 <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
   <identifier>IMD-CAP-FIXTURE-0001</identifier>
   <sender>imd.cap@imd.gov.in</sender>

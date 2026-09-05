@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "Model metadata and forecast points are fabricated for tests and must never be treated as a real IMD NWP forecast.",
+    "provenance": "synthetic-test-fixture"
+  },
   "model": "IMD-GFS",
   "model_cycle": "2026-09-04T00:00:00Z",
   "issued_at": "2026-09-04T01:30:00Z",

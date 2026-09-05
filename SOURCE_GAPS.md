@@ -1,171 +1,117 @@
-# Source Gaps & Verification Actions
+# Marine Data Engine — Source Status and Remaining Gaps
 
-This document records, for the platform/operations layer, **exactly which
-sources are usable today, which are blocked, and the precise action required to
-unblock each one**. It is derived from the research artifact
-[`source_mapping.md`](./source_mapping.md) (§2, §14, §15, §19, §20, §21) and the
-requirements (`marine_data_layer_requirements.md` §25/§28, `prompt.md` §27/§28).
+This document is the current operational source-of-truth for live marine data
+connectors. It supersedes the earlier HAR-A/HAR-C/HAR-D discovery notes in
+`source_mapping.md` and older README text.
 
-**Scope rule (three providers only):** IMD, INCOIS, MOSDAC. Where the three
-providers do not cover a required parameter, the gap is **marked, never filled
-with a fabricated or external dataset**. No additional provider is introduced as
-a solution anywhere in this platform.
+## Rules
 
-**Epistemics:** Anything not confirmed against a live response is written as
-`UNKNOWN — requires verification (ACTION-ID)`. Assumed access/auth/format is
-never recorded as fact. Licensing statements are **observed provider policy
-only** — no legal interpretation is made here.
+- Production workers instantiate live adapters only. Fixtures are explicit,
+  synthetic, test-only inputs and are never selected as fallback observations.
+- Empty upstream responses remain empty. They are recorded as `empty` (healthy
+  poll, zero records), never populated with inferred values.
+- Unknown endpoints, authentication headers, station IDs, geometry, units,
+  timestamps, licenses, or boundaries are never guessed.
+- Dataset outcomes distinguish `not_run`, `empty`, `auth_blocked`,
+  `contract_unavailable`, `license_gated`, `source_unavailable`,
+  `contract_error`, and `processing_error`.
 
----
+## Verified production connectors
 
-## 1. What is verified and usable today
-
-| Interface | Provider | Status | Enabled in stack |
+| Dataset | Verified machine contract | Geometry/values retained | Polling |
 |---|---|---|---|
-| CAP alerts (RSS index + signed CAP 1.2 items) | IMD | **VERIFIED (V1/V2)** — public-domain string observed | `imd_cap_alerts_poll` DAG + `worker-alerts` |
-| ERDDAP catalog (16 dataset IDs) | INCOIS | **CATALOG VERIFIED (V3)**; per-dataset schema pending ERDDAP-INFO | `incois_erddap_ingest` DAG + `worker-ingest` |
-| OpenSearch discovery API (`datasets.json`) | MOSDAC | **SEARCH VERIFIED (V4)**; downloads blocked (AUTH-A) | `mosdac_search_registry` DAG (catalog only) |
-| Official `mdapi.py` download client contract | MOSDAC | **SOURCE VERIFIED (V5)**; live auth not exercised | connector spec only |
+| `imd_cap` | `https://cap-sources.s3.amazonaws.com/in-imd-en/rss.xml` and linked CAP 1.2 XML | Source CAP areas and fields; no XML-signature trust claim | 1 minute |
+| `incois_pfz` | `https://gemini.incois.gov.in/api/ws/pfz` and `/pfzLines` | Native `Point` destination features and `LineString` advisory features; never polygonized | 3 hours |
+| `incois_hwa` | `https://sarat.incois.gov.in/incoismobileappdata/rest/incois/hwassalatestdata` plus `https://samudra.incois.gov.in/incoismobileappdata/rest/incois/districtpolygons` | Double-decoded HWA/SSA records joined by normalized state + district; Polygon/MultiPolygon only; validity parsed in `Asia/Kolkata` | 15 minutes |
+| `incois_tide` | `https://tsunami.incois.gov.in/itews/homexmls/TideStations.xml` and `https://tsunami.incois.gov.in/itews/JSONS/{UPPERCASE_DISPLAY_NAME}_1.json` | Dynamically enumerated station metadata and explicit latest `RAD`/`PRS`/`ENC` values only; malformed historical chart x-values are ignored | 10 minutes |
+| `incois_buoy` | `https://incois.gov.in/OON/fetchMooredBuoyData.jsp`, bounded `backend_process.jsp`, and OON OMNI/MORED chart pages | Dynamically enumerated active stations; verified `hm0` and `wind_speed` tokens only; exact selected label/unit, UTC declaration, and freshness required | 30 minutes |
+| `incois_erddap` | `https://erddap.incois.gov.in/erddap/info/index.json` and `/info/{dataset}/index.json` | Catalog/per-dataset metadata only in the current handler | 6 hours |
+| `mosdac_search` | `https://mosdac.gov.in/apios/datasets.json` | Discovery catalog only; authenticated product downloads excluded | 12 hours |
 
-These are the only machine-readable access paths confirmed live this session.
-Everything below is blocked or unverified and is kept **disabled** until the
-named action is completed.
+Airflow emits thin NATS triggers; role-isolated workers own the live fetch,
+raw archival, parsing, QC, persistence, freshness, and source-state update.
+Verified real-time DAGs are unpaused by default. Operators can disable all live
+fetches with `MDE_ENABLE_LIVE_SOURCES=false`; doing so records `disabled` and
+does not activate fixtures.
 
----
+## Explicitly blocked or unavailable
 
-## 2. PFZ — the P0 prerequisite (HAR-A)
+### IMD numeric marine NWP — `contract_unavailable`
 
-**INCOIS Potential Fishing Zone (PFZ)** is one of the most important domain
-entities (requirements §9), but its machine geometry is **not verified**:
+No documented numeric machine endpoint/schema or credential/header contract has
+been verified. Documented marine bulletin endpoints return HTTP 401, and no
+basis exists for assuming bearer-token authentication. The former guessed
+`/nwp/marine/forecast` path and bearer behavior have been removed. The
+production adapter performs no outbound request and raises
+`SourceContractUnavailableError`. Text bulletins and charts are not converted
+into invented numeric grid points. No NWP DAG is scheduled.
 
-- Entry page (wire-verified): `https://incois.gov.in/MarineFisheries/PfzAdvisory`
-- Machine geometry / XHR endpoint / format: **`UNKNOWN — requires verification (HAR-A)`**
+Reference: `https://api.imd.gov.in/public/api_reference.html`.
 
-**Disposition:** PFZ is a **P0 *prerequisite*, not a shippable P0 connector.**
-The `incois_pfz` dataset is seeded in the registry as **DISABLED** and the `pfz`
-table exists (SRID 4326) so nearest-PFZ / suitability inputs can be enabled the
-moment HAR-A succeeds — but **no PFZ geometry is fabricated** in the meantime.
+### India EEZ geometry — `license_gated`
 
-**HAR-A action (exact):** From `https://incois.gov.in/MarineFisheries/PfzAdvisory`,
-open DevTools → Network → XHR/Fetch → record every JSON/GeoJSON/WFS/NetCDF
-request → export HAR → confirm the geometry endpoint URL, format, auth, and
-update cadence. Only after HAR-A is confirmed should the `incois_pfz` connector
-be implemented and the registry row promoted.
+Marine Regions WFS layer `MarineRegions:eez`, filtered by
+`iso_sov1='IND' OR iso_sov2='IND'`, is the verified source for World EEZ v12
+India sovereign geometry. Production fetch is blocked before network I/O until
+an operator supplies the reviewed permission/attribution reference in
+`MARINE_REGIONS_LICENSE_ACKNOWLEDGEMENT`. No schedule is installed while the
+gate is closed.
 
----
+Verified endpoint: `https://geo.vliz.be/geoserver/MarineRegions/wfs`.
 
-## 3. All source gaps (marked, not filled)
+### Zone categories with no loaded authoritative source
 
-### 3.1 In-scope but blocked/unverified (unblock via the named action)
+The following remain independently `not_loaded` and must not be inferred from
+EEZ coverage:
 
-| Gap | Requirement driver | Status | Action | Priority |
-|---|---|---|---|---|
-| PFZ machine geometry/XHR | PFZ, suitability | entry page only | **HAR-A** | **P0 prerequisite** |
-| INCOIS OSF surface currents dataset | currents, routing | unverified | HAR-B | P1 |
-| INCOIS OSF wave/swell/wind-wave dataset | waves, windows, routing | unverified | HAR-B | P1 |
-| INCOIS HWA / swell alert JSON | high-wave/swell alert | unverified | HAR-C | P1 |
-| INCOIS storm surge feed | storm surge | unverified | HAR-C | P1 |
-| INCOIS TEWS tsunami feed | tsunami (safety-critical) | unverified | HAR-C | P1 |
-| INCOIS tide **prediction** feed | tides, windows | unverified; may not exist as a feed | HAR-D | P1 |
-| INCOIS TCHP | TCHP | unverified | HAR-C | P2 |
-| INCOIS LAS / ESSDP data protocols | remote sensing/analysis | unverified | HAR-F | P2 |
-| ERDDAP per-dataset schema (16 datasets) | SST/CHL/wind/ARGO numeric | catalog only | ERDDAP-INFO | P0 (before numeric ingest) |
-| IMD structured cyclone (track/cone/intensity) | cyclone | blocked/unverified (RSMC) | REG-A / HAR | P1 (CAP polygon partial interim) |
-| IMD numeric NWP (wind/rain/pressure/humidity) | weather | token-gated; public pages VISUAL-ONLY | REG-A | P1 |
-| IMD authenticated API marine endpoints | weather, obs | 401/403 on legacy; token required | REG-A | P1 |
-| IMD radar / GIS numeric service | radar | image tiles only | HAR-E | P2 |
-| MOSDAC authenticated download (all products) | ocean/atmos numeric | search open; download not exercised | AUTH-A | P1 |
-| MOSDAC open-data datasetIds (CHL/current/SSS/subsurface/eddies/rainfall) | numeric params | to resolve via search | DSID-* | P1 |
-| IMD buoy update cadence + station IDs | in-situ obs | HTML pattern only | OBS-BUOY | P1 |
-| CAP issued-event coverage | alert taxonomy | measured, not assumed | OBS-CAP | P1 |
-| CAP `ds:Signature` trust chain | safety-critical trust | key retrieval unknown | SIG-A | P1 (before trusting CAP for automation) |
-| MOSDAC OpenSearch descriptor | discovery | not fetched | OSDD-A | P2 |
+- marine protected areas;
+- restricted/no-fishing/exclusion areas;
+- naval and firing-range areas.
 
-### 3.2 Out of in-scope providers — hard GAPs (do **not** fabricate)
+MCP and geofence responses report each category separately. Loading an EEZ
+feature never implies these categories are covered or clear.
 
-These are required by the requirements/geofencing/routing scope but are **not
-supplied by any of IMD/INCOIS/MOSDAC**. The corresponding tables (`zone`,
-`bathymetry`) exist in the schema so the capabilities work once an authoritative
-external GIS dataset is sourced later — but they are intentionally **empty of
-fabricated data**.
+### Other genuine gaps
 
-| Gap | Requirement driver | Disposition |
-|---|---|---|
-| EEZ / international maritime boundaries | geofence | **GAP — external authoritative GIS required later; do not fabricate** |
-| Restricted zones / MPAs / ecologically sensitive zones | geofence | **GAP — do not fabricate** |
-| Ports / harbours | reference | **GAP** |
-| Shipping lanes | routing | **GAP** |
-| Bathymetry / depth | routing, shallow-water safety | **GAP — do not infer depth from other parameters** |
-| Fisheries catch / effort / productivity | fisheries analysis | **GAP — no productivity attribution claims until sourced** |
+- Tide **predictions** are not provided by the TEWS observation connector.
+- Numeric ocean grids/current products are not claimed merely because ERDDAP
+  metadata is catalogued; a dataset-specific validated parser is required.
+- MOSDAC product downloads remain credential/license gated.
+- Structured cyclone track/cone/intensity and machine-readable storm-surge
+  products beyond the verified HWA/SSA contract remain unavailable.
+- CAP XML signature trust-chain verification is not implemented; CAP parsing
+  does not claim cryptographic authenticity.
+- Bathymetry, shipping lanes, fisheries catch/effort, and other unsourced layers
+  remain absent rather than inferred.
 
-### 3.3 Build-dependencies (not provider gaps)
+## Provenance and freshness
 
-| Item | Note |
-|---|---|
-| Anomaly baselines (SST/CHL/current/wave/rainfall/pressure) | Not a source; requires retaining history over time before anomaly/percentile products are meaningful. |
+Every canonical environmental row retains provider, dataset, source URL,
+retrieval time, processing version, quality status, and structured source
+metadata. Station and marine-zone records retain their own authoritative
+metadata. Query distance uses the nearest point on actual source geometry, and
+point-on-boundary checks are inclusive.
 
----
+A successful poll updates `last_checked_at`, `last_result_state`,
+`last_result_count`, and status detail even when it emits no records. Blocked or
+failed states are not overwritten by the freshness evaluator. API and MCP
+responses derive provider attribution from returned canonical rows and persist
+source states, capability status, versions, lineage, and warnings in evidence
+records.
 
-## 4. Visualization-only sources (excluded from numeric ingest)
+## Fixture policy
 
-Per source_mapping §14, products returning only images/tiles/PDF with no
-machine-readable numeric payload are **not** treated as data sources:
+Files under `tests/fixtures/` represent synthetic contract shapes for offline
+validation. They are labeled test-only and are not observations. Production
+worker factories never import or select fixture adapters, regardless of the
+live-source flag.
 
-- IMD NWP / coastal-forecast charts (PNG/PDF) — use registered GRIB2 (REG-A) instead; do not OCR charts.
-- IMD radar imagery (image tiles) — not numeric precipitation data.
-- MOSDAC gallery quicklooks (PNG/GIF/JPG) — use the corresponding `.h5`/`.nc` product file instead.
-- INCOIS portal / LAS / ESSDP rendered map views — capture the underlying XHR (HAR-A/B/F) or use ERDDAP.
+## TLS and credentials
 
----
-
-## 5. Licensing / redistribution posture (observed only)
-
-Recorded as the literal published provider policy; **no legal interpretation**.
-Redistribution / commercial-use clearance is a separate legal/procurement action.
-
-| Provider | Observed policy | Note |
-|---|---|---|
-| IMD CAP | RSS `<copyright>public domain</copyright>` (V1) | Confirm scope covers derived redistribution before commercial reliance. |
-| IMD API / DSP | Registration + possible payment + license terms | Terms `UNKNOWN — verify (REG-A)`. |
-| IMD buoy page | No explicit license string observed | Absence of a notice is **not** a grant; treat as restricted. |
-| INCOIS ERDDAP / data | INCOIS data policy; bulk data **may be chargeable** | Cite published pricing/policy at access time. |
-| INCOIS PFZ / advisories | INCOIS advisory policy | Reuse terms `UNKNOWN — verify (HAR-A)`. |
-| MOSDAC search | Search open; `author=MOSDAC,SAC-ISRO,India` on results | Search-open ≠ redistribution grant. |
-| MOSDAC download / open-data | Account-gated download | Download license `UNKNOWN — verify (AUTH-A)`. |
-
----
-
-## 6. How this maps into the platform
-
-- **Credentials blank ⇒ connector disabled.** `.env.example` ships `MOSDAC_*`
-  and `IMD_API_TOKEN` blank; the corresponding registry rows are seeded
-  `DISABLED`/`DEGRADED` so nothing attempts unverified authenticated access.
-- **TLS:** INCOIS ERDDAP omits its intermediate cert (V3-TLS). Connectors must
-  bundle the GlobalSign intermediate (`INCOIS_CA_BUNDLE`) and **never disable
-  TLS verification**.
-- **Schema ready, data empty:** `zone` and `bathymetry` tables exist for
-  geofencing/routing but hold **no fabricated boundaries or depths**.
-- **Safety-critical freshness:** CAP, tsunami, and surge datasets must never be
-  served as fresh without an explicit age/status flag (requirements §16;
-  `dataset_freshness` hypertable + `dataset_freshness_sweep` DAG).
-
----
-
-## 7. Outstanding verification actions (quick reference)
-
-| Action | Target |
-|---|---|
-| **HAR-A** | INCOIS PFZ machine geometry endpoint/schema (**P0 prerequisite**) |
-| HAR-B | INCOIS OSF currents/waves/swell/wind-wave dataset URL + schema |
-| HAR-C | INCOIS HWA / storm surge / TEWS / TCHP feeds + schemas |
-| HAR-D | INCOIS tide observation endpoint + whether a prediction feed exists |
-| HAR-E | IMD radar/GIS numeric service (else VISUAL-ONLY) |
-| HAR-F | INCOIS LAS/ESSDP per-product data protocol |
-| ERDDAP-INFO | Per-dataset variables/units/axes/coverage/resolution for the 16 IDs |
-| REG-A | IMD `api.imd.gov.in` token + marine/NWP endpoint list |
-| AUTH-A | MOSDAC `gettoken` → `download` end-to-end with real credentials |
-| DSID-* | MOSDAC datasetIds for CHL/current/SSS/subsurface/eddies/rainfall |
-| OBS-CAP | Enumerate the CAP event families IMD actually issues |
-| OBS-BUOY | IMD buoy update cadence + station IDs |
-| OSDD-A | MOSDAC OpenSearch descriptor contents |
-| SIG-A | IMD CAP `ds:Signature` key retrieval/verification procedure |
+- TLS verification must never be disabled. The engine augments system roots
+  with its verified bundled GlobalSign RSA OV SSL CA 2018 intermediate for
+  INCOIS hosts that omit it. `INCOIS_CA_BUNDLE` may add an operator-managed PEM
+  bundle; it is not an insecure fallback.
+- Blank credentials or missing approvals produce explicit blocked states.
+- Project code, secrets, and upstream payloads are not sent to third-party
+  services outside the configured authoritative source and storage endpoints.

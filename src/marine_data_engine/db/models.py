@@ -104,6 +104,10 @@ class Dataset(Base):
     last_success_at: Mapped[datetime | None] = ts_column(nullable=True)
     last_failure_at: Mapped[datetime | None] = ts_column(nullable=True)
     last_processed_at: Mapped[datetime | None] = ts_column(nullable=True)
+    last_checked_at: Mapped[datetime | None] = ts_column(nullable=True)
+    last_result_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_result_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = ts_column(default=utcnow)
     updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow)
 
@@ -146,6 +150,7 @@ class _ProvenanceMixin:
     provider: Mapped[str] = mapped_column(String(64), index=True)
     source_dataset: Mapped[str] = mapped_column(String(128), index=True)
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    source_metadata: Mapped[dict] = mapped_column(default=dict)
     processing_version: Mapped[str] = mapped_column(String(32), default="1.0.0")
 
     # Distinct timestamps — never conflated.
@@ -185,6 +190,7 @@ class Observation(Base, _ProvenanceMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     station_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     station_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sensor_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     parameter: Mapped[str] = mapped_column(String(64), index=True)
@@ -291,8 +297,14 @@ class Station(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_dataset: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_reported_at: Mapped[datetime | None] = ts_column(nullable=True)
+    retrieved_at: Mapped[datetime | None] = ts_column(nullable=True)
+    source_metadata: Mapped[dict] = mapped_column(default=dict)
     created_at: Mapped[datetime] = ts_column(default=utcnow)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow)
 
 
 class Port(Base):
@@ -330,8 +342,12 @@ class MarineZone(Base):
     effective_from: Mapped[datetime | None] = ts_column(nullable=True)
     effective_until: Mapped[datetime | None] = ts_column(nullable=True)
     source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_dataset: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    retrieved_at: Mapped[datetime | None] = ts_column(nullable=True)
+    source_metadata: Mapped[dict] = mapped_column(default=dict)
     created_at: Mapped[datetime] = ts_column(default=utcnow)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow)
 
 
 # --------------------------------------------------------------------------- #
@@ -421,7 +437,24 @@ class Evidence(Base):
     freshness: Mapped[dict] = mapped_column(default=dict)
     quality: Mapped[dict] = mapped_column(default=dict)
     warnings: Mapped[list] = mapped_column(default=list)
+    capability_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    data_versions: Mapped[dict] = mapped_column(default=dict)
+    data_lineage: Mapped[list] = mapped_column(default=list)
     generated_at: Mapped[datetime] = ts_column(default=utcnow)
+
+
+class DatasetFreshness(Base):
+    """Latest evaluated freshness state for one dataset."""
+
+    __tablename__ = "dataset_freshness"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    last_data_at: Mapped[datetime | None] = ts_column(nullable=True)
+    expected_interval_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    freshness_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    evaluated_at: Mapped[datetime] = ts_column(default=utcnow)
 
 
 class DataQualityRecord(Base):
@@ -462,5 +495,6 @@ ALL_MODELS = [
     ProcessingJob,
     ProcessingRun,
     Evidence,
+    DatasetFreshness,
     DataQualityRecord,
 ]

@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "Station IDs and water levels are fabricated for tests and must never be treated as real INCOIS tide-gauge observations.",
+    "provenance": "synthetic-test-fixture"
+  },
   "provider": "INCOIS",
   "dataset": "incois_tide",
   "observations": [

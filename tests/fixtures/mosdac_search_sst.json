@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "Search results are a fabricated snapshot for tests and must never be treated as a live MOSDAC catalog response.",
+    "provenance": "synthetic-test-fixture"
+  },
   "totalResults": 2,
   "startIndex": 0,
   "itemsPerPage": 10,

@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "All identifiers (e.g. pfz_id PFZ-GOA-2026-09-03-01) are fabricated for tests and must never be treated as real INCOIS advisories.",
+    "provenance": "synthetic-test-fixture"
+  },
   "type": "FeatureCollection",
   "features": [
     {

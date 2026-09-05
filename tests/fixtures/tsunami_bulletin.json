@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "event_id TSU-INCOIS-2026-0912 is fabricated for tests and must never be treated as a real INCOIS/TEWS tsunami bulletin.",
+    "provenance": "synthetic-test-fixture"
+  },
   "event_id": "TSU-INCOIS-2026-0912",
   "earthquake_time": "2026-09-03T04:22:10Z",
   "earthquake": {

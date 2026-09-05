@@ -19,7 +19,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from ..db.enums import QueuePriority
-from .subjects import PRIORITY_RANK, backoff_delay_seconds, dlq_subject, work_subject
+from .subjects import (
+    PRIORITY_RANK,
+    WORK_PRIORITIES,
+    backoff_delay_seconds,
+    dlq_subject,
+    work_subject,
+)
 
 
 @dataclass
@@ -153,10 +159,23 @@ class JetStreamQueue:
     and DLQ publication on exhaustion.
     """
 
-    def __init__(self, *, servers: str, stream_prefix: str, max_deliver: int = 5) -> None:
+    def __init__(
+        self,
+        *,
+        servers: str,
+        stream_prefix: str,
+        max_deliver: int = 5,
+        consumer_name: str = "worker",
+        priorities: tuple[QueuePriority, ...] | None = None,
+    ) -> None:
         self._servers = servers
         self._prefix = stream_prefix
         self._max_deliver = max_deliver
+        self._consumer_name = "".join(
+            character if character.isalnum() or character in "_-" else "_"
+            for character in consumer_name
+        ) or "worker"
+        self._priorities = priorities or WORK_PRIORITIES
         self._nc = None
         self._js = None
         # Per-priority durable pull subscriptions, created by subscribe().
@@ -169,10 +188,11 @@ class JetStreamQueue:
         self._nc = await nats.connect(self._servers)
         self._js = self._nc.jetstream()
         # Streams are declared per-priority so each has an isolated retention
-        # and consumer configuration.
-        from .subjects import WORK_PRIORITIES, dlq_subject, work_subject
+        # and consumer configuration. Role-specific workers ensure only the
+        # streams they own; general producers retain the all-priority default.
+        from .subjects import dlq_subject, work_subject
 
-        for pr in WORK_PRIORITIES:
+        for pr in self._priorities:
             await self._js.add_stream(
                 name=f"{self._prefix}_{pr.value}",
                 subjects=[work_subject(self._prefix, pr), dlq_subject(self._prefix, pr)],
@@ -215,8 +235,19 @@ class JetStreamQueue:
 
     async def close(self) -> None:
         self._running = False
-        if self._nc is not None:
-            await self._nc.drain()
+        connection = self._nc
+        self._nc = None
+        self._js = None
+        self._subs.clear()
+        if connection is None:
+            return
+        try:
+            await connection.drain()
+        except Exception:  # noqa: BLE001 - close must not mask the root failure
+            try:
+                await connection.close()
+            except Exception:  # noqa: BLE001 - process teardown is best effort
+                pass
 
     # -- durable pull consumer ------------------------------------------ #
     async def subscribe(self, priority: QueuePriority, handler: Callable) -> None:
@@ -229,7 +260,7 @@ class JetStreamQueue:
         assert self._js is not None, "connect() must be called first"
         from nats.js.api import ConsumerConfig  # noqa: PLC0415
 
-        durable = f"{self._prefix}_{priority.value}_worker"
+        durable = f"{self._prefix}_{priority.value}_{self._consumer_name}"
         # C1 fix: explicitly specify stream name to avoid
         # find_stream_name_by_subject timeout in NATS JetStream.
         stream_name = f"{self._prefix}_{priority.value}"
@@ -309,9 +340,8 @@ class JetStreamQueue:
         import pathlib  # noqa: PLC0415
         import time  # noqa: PLC0415
 
-        from .subjects import WORK_PRIORITIES  # noqa: PLC0415
 
-        for pr in WORK_PRIORITIES:
+        for pr in self._priorities:
             if pr not in self._subs:
                 await self.subscribe(pr, handlers)
 
@@ -323,7 +353,7 @@ class JetStreamQueue:
             except OSError:  # pragma: no cover - non-fatal
                 pass
             did_work = False
-            for pr in WORK_PRIORITIES:
+            for pr in self._priorities:
                 sub = self._subs.get(pr)
                 if sub is None:
                     continue

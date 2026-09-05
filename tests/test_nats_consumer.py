@@ -12,6 +12,7 @@ from pathlib import Path
 from marine_data_engine.db.enums import QueuePriority
 from marine_data_engine.messaging.queue import JetStreamQueue
 from marine_data_engine.messaging.subjects import WORK_PRIORITIES
+from marine_data_engine.worker.runtime import _run_jetstream_session
 
 
 class _FakeMsg:
@@ -93,6 +94,59 @@ def test_async_handler_is_awaited():
 
     assert seen == ["processing.completed"]
     assert msg.acked is True
+
+
+def test_jetstream_session_uses_one_event_loop():
+    events: list[str] = []
+    loop_ids: list[int] = []
+
+    class _FakeQueue:
+        async def connect(self):
+            events.append("connect")
+            loop_ids.append(id(asyncio.get_running_loop()))
+
+        async def consume_loop(self, handlers):
+            assert "alert.created" in handlers
+            events.append("consume")
+            loop_ids.append(id(asyncio.get_running_loop()))
+
+        async def close(self):
+            events.append("close")
+            loop_ids.append(id(asyncio.get_running_loop()))
+
+    ready: list[bool] = []
+    asyncio.run(
+        _run_jetstream_session(
+            _FakeQueue(),
+            {"alert.created": lambda _payload: None},
+            on_ready=lambda: ready.append(True),
+        )
+    )
+
+    assert events == ["connect", "consume", "close"]
+    assert ready == [True]
+    assert len(set(loop_ids)) == 1
+
+
+def test_close_falls_back_when_drain_fails():
+    queue = _new_queue()
+
+    class _FailingConnection:
+        closed = False
+
+        async def drain(self):
+            raise TimeoutError("drain timed out")
+
+        async def close(self):
+            self.closed = True
+
+    connection = _FailingConnection()
+    queue._nc = connection
+    asyncio.run(queue.close())
+
+    assert connection.closed is True
+    assert queue._nc is None
+    assert queue._js is None
 
 
 def test_consume_loop_dispatches_and_writes_heartbeat():

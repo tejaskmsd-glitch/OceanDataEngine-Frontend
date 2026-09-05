@@ -1,4 +1,10 @@
 {
+  "_fixture_metadata": {
+    "synthetic": true,
+    "purpose": "Offline deterministic test fixture. NOT production data.",
+    "warning": "This ERDDAP catalog is a fabricated snapshot for tests and must never be treated as a live INCOIS ERDDAP response.",
+    "provenance": "synthetic-test-fixture"
+  },
   "table": {
     "columnNames": [
       "griddap",

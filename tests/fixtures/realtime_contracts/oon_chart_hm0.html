@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!--
+  TEST-ONLY synthetic representation of the verified INCOIS OON moored-data
+  Highcharts page. NOT production data. Structure mirrors the verified contract:
+  a server-rendered select whose chosen option value/label identifies the
+  parameter, an explicit useUTC:true plus "Time (UTC)" axis, a yAxis unit array,
+  and a Highcharts series pair-array block whose final valid pair is the latest
+  observation.
+-->
+<html>
+<head><title>Moored Buoy Data</title></head>
+<body>
+<form>
+  <select name="parameter" id="parameter">
+    <option value="wind_speed">Wind Speed</option>
+    <option value="hm0" selected>Significant Wave Height</option>
+    <option value="atmp">Air Temperature</option>
+  </select>
+</form>
+<div id="chart"></div>
+<script type="text/javascript">
+Highcharts.setOptions({ global: { useUTC: true } });
+Highcharts.chart('chart', {
+  chart: { type: 'line' },
+  title: { text: 'Significant Wave Height' },
+  xAxis: { type: 'datetime', title: { text: 'Time (UTC)' } },
+  yAxis: [ { title: { text: ['m'] } } ],
+  series: [{
+    name: 'Significant Wave Height',
+    data: [
+      [__EPOCH1__, 1.10],
+      [__EPOCH2__, 1.25],
+      [__EPOCH3__, 1.42]
+    ],
+    tooltip: { valueSuffix: ' m' }
+  }]
+});
+</script>
+</body>
+</html>

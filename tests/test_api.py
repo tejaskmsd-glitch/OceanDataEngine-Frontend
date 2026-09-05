@@ -15,8 +15,17 @@ def test_health(client):
 def test_datasets(client):
     r = client.get("/v1/datasets")
     assert r.status_code == 200
-    keys = {d["key"] for d in r.json()["data"]}
+    rows = r.json()["data"]
+    keys = {d["key"] for d in rows}
     assert {"imd_cap", "incois_pfz"} <= keys
+    by_key = {row["key"]: row for row in rows}
+    assert by_key["imd_nwp"]["last_result_state"] == "contract_unavailable"
+    assert by_key["imd_nwp"]["status_detail"]
+    assert (
+        by_key["marine_regions_eez_india"]["last_result_state"]
+        == "license_gated"
+    )
+    assert by_key["marine_regions_eez_india"]["status_detail"]
 
 
 def test_data_health_reports_freshness(client):
@@ -26,6 +35,12 @@ def test_data_health_reports_freshness(client):
     assert all("freshness" in row for row in rows)
     imd = next(row for row in rows if row["dataset"] == "imd_cap")
     assert imd["status"] in {"healthy", "stale", "degraded", "failed", "disabled"}
+    by_key = {row["dataset"]: row for row in rows}
+    assert by_key["imd_nwp"]["last_result_state"] == "contract_unavailable"
+    assert (
+        by_key["marine_regions_eez_india"]["last_result_state"]
+        == "license_gated"
+    )
 
 
 def test_pfz_near_goa_returns_zone(client):
@@ -111,6 +126,22 @@ def test_dataset_status_returns_freshness(client):
     assert ds["freshness"]["expected_update_interval_s"] is not None
 
 
+def test_dataset_status_preserves_explicit_source_outcome(client):
+    nwp = client.get("/v1/datasets/imd_nwp/status")
+    assert nwp.status_code == 200
+    nwp_data = nwp.json()["data"]
+    assert nwp_data["status"] == "disabled"
+    assert nwp_data["last_result_state"] == "contract_unavailable"
+    assert nwp_data["status_detail"]
+
+    eez = client.get("/v1/datasets/marine_regions_eez_india/status")
+    assert eez.status_code == 200
+    eez_data = eez.json()["data"]
+    assert eez_data["status"] == "disabled"
+    assert eez_data["last_result_state"] == "license_gated"
+    assert eez_data["status_detail"]
+
+
 def test_dataset_status_unknown_404(client):
     r = client.get("/v1/datasets/does_not_exist/status")
     assert r.status_code == 404
@@ -151,7 +182,9 @@ def test_ocean_forecast_returns_envelope(client):
     body = r.json()
     _assert_envelope(body)
     assert body["data"] == []
-    assert body["warnings"]
+    assert any(
+        "SOURCE_CONTRACT_UNAVAILABLE" in warning for warning in body["warnings"]
+    )
 
 
 def test_weather_conditions_returns_envelope(client):
@@ -169,7 +202,9 @@ def test_weather_forecast_returns_envelope(client):
     body = r.json()
     _assert_envelope(body)
     assert body["data"] == []
-    assert body["warnings"]
+    assert any(
+        "SOURCE_CONTRACT_UNAVAILABLE" in warning for warning in body["warnings"]
+    )
 
 
 def test_fishing_advisories_returns_envelope(client):
@@ -203,8 +238,44 @@ def test_tides_returns_envelope(client):
     body = r.json()
     _assert_envelope(body)
     assert body["data"] == []
-    # HAR-D blocker is reported honestly.
-    assert any("HAR-D" in w for w in body["warnings"])
+    # The live TEWS contract is verified, but this test has not polled it.
+    assert any("SOURCE_NOT_INGESTED" in warning for warning in body["warnings"])
+    assert all("HAR-D" not in warning for warning in body["warnings"])
+
+
+def test_tides_healthy_empty_is_not_reported_as_not_ingested(
+    client, db_session, raw_store
+):
+    from datetime import UTC, datetime
+
+    from marine_data_engine.services.ingestion import IngestionService
+    from marine_data_engine.sources.base import FetchResult, RawPayload
+
+    result = FetchResult(
+        raw=RawPayload(
+            provider="INCOIS",
+            dataset="incois_tide",
+            data=b"[]",
+            ext="json",
+            media_type="application/json",
+            source_url="https://tsunami.incois.gov.in/test-only-empty",
+            retrieved_at=datetime.now(tz=UTC),
+        ),
+        result_state="empty",
+        status_detail="source healthy but no current values",
+    )
+    IngestionService(db_session, raw_store).ingest(result)
+    db_session.commit()
+
+    response = client.get("/v1/tides", params={"lat": 15.45, "lon": 73.5})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"] == []
+    assert any("SOURCE_HEALTHY_EMPTY" in warning for warning in body["warnings"])
+
+    evidence = client.get(f"/v1/evidence/{body['meta']['request_id']}").json()["data"]
+    assert evidence["capability_status"] == "healthy_empty"
+    assert evidence["freshness"]["source_states"][0]["state"] == "empty"
 
 
 def test_geofence_check_returns_envelope(client):

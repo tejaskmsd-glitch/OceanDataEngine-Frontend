@@ -83,19 +83,26 @@ with full jitter**, explicit job status, and **dead-letter** after
 `max_attempts`. The worker (`worker/runtime.py`) dispatches by event type,
 acks on success, and nacks (retry/DLQ) on failure, emitting Prometheus metrics.
 
-## Source connectors (live disabled)
+## Source connectors
 
-- **IMD CAP** — parses the verified CAP 1.2 feed format
-  (`cap-sources.s3.amazonaws.com/in-imd-en/rss.xml` → CAP XML). Timestamp
-  mapping: `sent`→`issued_at`, `effective`/`onset`→`valid_from`,
-  `expires`→`valid_until`. CAP polygons are converted to closed GeoJSON rings.
-- **INCOIS PFZ** — parses a GeoJSON FeatureCollection mirroring the documented
-  `pfz` entity. The machine geometry endpoint is **UNVERIFIED (HAR-A)**, so the
-  live connector is **disabled** and refuses to run; authoritative geometry is
-  never fabricated.
+- **IMD CAP** parses the verified RSS-linked CAP 1.2 feed. Parsing does not
+  claim XML-signature trust-chain verification.
+- **INCOIS PFZ** fetches verified Gemini destination `Point` and advisory
+  `LineString` FeatureCollections and preserves those types exactly.
+- **INCOIS HWA/SSA** double-decodes live alert arrays, joins authoritative
+  district polygons, and parses validity in `Asia/Kolkata`.
+- **INCOIS TEWS tide** enumerates official stations and accepts only explicit
+  latest `RAD`/`PRS`/`ENC` sensor timestamp/value fields.
+- **INCOIS OON buoy** dynamically enumerates active stations and validates the
+  selected parameter token, label, unit, UTC declaration, and freshness.
+- **IMD numeric NWP** is deliberately `contract_unavailable`; it sends no
+  guessed endpoint or authentication request.
+- **Marine Regions India EEZ** is implemented but license-gated before network
+  access. MPA/restricted/naval/firing geometry remains independently absent.
 
-Live connectors require `MDE_ENABLE_LIVE_SOURCES=true` and are intentionally
-not wired to the network in this build; ingestion runs from fixtures.
+Workers always construct live adapters. `MDE_ENABLE_LIVE_SOURCES=false` records
+an explicit disabled state; it never switches production ingestion to fixtures.
+Fixtures are synthetic, explicit test inputs only.
 
 ## API (query-only)
 

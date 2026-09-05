@@ -98,7 +98,17 @@ def test_source_gap_returned_not_empty_silence(client, seeded):
     # The response must EXPLAIN the gap, not just return empty data.
     assert body["warnings"], "expected an explanatory warning, got none"
     warning_text = " ".join(body["warnings"])
-    assert "SOURCE_GAP" in warning_text or "source gap" in warning_text.lower()
+    recognized_states = (
+        "SOURCE_NOT_INGESTED",
+        "SOURCE_HEALTHY_EMPTY",
+        "SOURCE_AUTH_BLOCKED",
+        "SOURCE_CONTRACT_UNAVAILABLE",
+        "SOURCE_LICENSE_GATED",
+        "SOURCE_UNAVAILABLE",
+        "SOURCE_DISABLED",
+        "SOURCE_GAP",
+    )
+    assert any(state in warning_text for state in recognized_states)
 
 
 # --------------------------------------------------------------------------- #

@@ -213,7 +213,9 @@ def evaluate_safety_gate(
         notes.append("Clearance withheld: an active hazard or high computed risk blocks departure.")
     elif risk is not None and risk.risk_level in _CAUTION_RISK_LEVELS:
         status = STATUS_CLEARED_WITH_CAUTION
-        notes.append("Conditions are marginal; proceed only with active monitoring and an abort plan.")
+        notes.append(
+            "Conditions are marginal; proceed only with active monitoring and an abort plan."
+        )
     else:
         status = STATUS_CLEARED
         notes.append("Required inputs present and conditions assessed as low risk.")

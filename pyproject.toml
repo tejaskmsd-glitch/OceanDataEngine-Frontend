@@ -34,6 +34,9 @@ dependencies = [
 [project.optional-dependencies]
 # Object storage (MinIO / S3). Kept optional so the API/tests can run without it.
 storage = ["boto3==1.35.90"]
+# Schema migration CLI. The API deployment image includes this extra so
+# migrations never depend on an install-time network request.
+migrations = ["alembic==1.14.0"]
 # MCP server SDK. Kept optional so the core engine/API/tests do not require it;
 # the dedicated `mcp` container installs `.[storage,mcp]`.
 mcp = ["mcp==1.29.1"]
@@ -55,6 +58,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+marine_data_engine = ["certs/*.pem"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

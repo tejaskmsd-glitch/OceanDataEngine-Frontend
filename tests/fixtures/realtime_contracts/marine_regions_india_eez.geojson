@@ -1,0 +1,40 @@
+{
+  "_fixture_metadata": {
+    "synthetic": true,
+    "test_only": true,
+    "purpose": "Synthetic representation of the verified Marine Regions WFS MarineRegions:eez GetFeature response for India (World EEZ v12). NOT production data.",
+    "warning": "Coordinates are coarse fabricated boxes, not the real India EEZ geometry.",
+    "provenance": "synthetic-test-fixture"
+  },
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "eez.1",
+      "properties": {
+        "mrgid": 8480,
+        "geoname": "Indian Exclusive Economic Zone",
+        "iso_sov1": "IND",
+        "iso_sov2": null
+      },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [[[[68.0, 8.0], [90.0, 8.0], [90.0, 22.0], [68.0, 22.0], [68.0, 8.0]]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "eez.2",
+      "properties": {
+        "mrgid": 8481,
+        "geoname": "Indian Exclusive Economic Zone (Andaman and Nicobar Islands)",
+        "iso_sov1": "IND",
+        "iso_sov2": null
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[91.0, 6.0], [95.0, 6.0], [95.0, 14.0], [91.0, 14.0], [91.0, 6.0]]]
+      }
+    }
+  ]
+}

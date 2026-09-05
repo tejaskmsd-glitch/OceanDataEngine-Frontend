@@ -44,13 +44,13 @@ migrate: ## Apply Alembic migrations (canonical schema)
 	$(COMPOSE) run --rm --no-deps \
 	  -v $(PWD)/alembic.ini:/app/alembic.ini:ro \
 	  -v $(PWD)/migrations:/app/migrations:ro \
-	  api sh -lc "export PATH=\$$HOME/.local/bin:\$$PATH && pip install --quiet alembic==1.14.0 && alembic upgrade head"
+	  api alembic upgrade head
 
 migrate-down: ## Roll back one migration
 	$(COMPOSE) run --rm --no-deps \
 	  -v $(PWD)/alembic.ini:/app/alembic.ini:ro \
 	  -v $(PWD)/migrations:/app/migrations:ro \
-	  api sh -lc "export PATH=\$$HOME/.local/bin:\$$PATH && pip install --quiet alembic==1.14.0 && alembic downgrade -1"
+	  api alembic downgrade -1
 # ---------------------------------------------------------------------------
 # Fixtures / seed data
 # ---------------------------------------------------------------------------

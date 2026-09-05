@@ -13,10 +13,17 @@ from .base import (
     LiveSourceDisabledError,
     ParsedAlert,
     ParsedForecast,
+    ParsedMarineZone,
     ParsedObservation,
     ParsedPFZ,
+    ParsedStation,
     RawPayload,
     SourceAdapter,
+    SourceAdapterError,
+    SourceContractError,
+    SourceContractUnavailableError,
+    SourceLicenseRequiredError,
+    SourceUnavailableError,
 )
 from .hazards import (
     CycloneFixtureAdapter,
@@ -26,6 +33,16 @@ from .hazards import (
     parse_cyclone_bulletin,
     parse_storm_surge_advisory,
     parse_tsunami_bulletin,
+)
+from .imd_buoy import (
+    BuoyStructureError,
+    IMDBuoyFixtureAdapter,
+    IMDBuoyLiveAdapter,
+    INCOISBuoyLiveAdapter,
+    parse_buoy_html,
+    parse_oon_backend_status,
+    parse_oon_chart,
+    parse_oon_station_catalog,
 )
 from .imd_cap import (
     IMDCapFixtureAdapter,
@@ -52,17 +69,27 @@ from .incois_erddap import (
 from .incois_hwa import (
     INCOISHighWaveFixtureAdapter,
     INCOISHighWaveLiveAdapter,
+    parse_alert_validity,
     parse_high_wave_alerts,
+    parse_live_high_wave_alerts,
 )
 from .incois_pfz import (
     INCOISPfzFixtureAdapter,
     INCOISPfzLiveAdapter,
+    parse_live_pfz,
     parse_pfz_featurecollection,
 )
 from .incois_tide import (
     INCOISTideFixtureAdapter,
     INCOISTideLiveAdapter,
+    parse_tews_observation_series,
+    parse_tews_station_xml,
     parse_tide_observations,
+)
+from .marine_regions import (
+    MarineRegionsEEZLiveAdapter,
+    build_india_eez_url,
+    parse_india_eez,
 )
 from .mosdac_download import (
     MOSDACDownloadAdapter,
@@ -77,17 +104,11 @@ from .mosdac_search import (
 from .mosdac_search import (
     parse_search_response as parse_mosdac_search,
 )
-from .imd_buoy import (
-    IMDBuoyFixtureAdapter,
-    IMDBuoyLiveAdapter,
-    parse_buoy_html,
-    BuoyStructureError,
-)
 from .nga_ports import (
     NGAPortFixtureAdapter,
     NGAPortLiveAdapter,
-    parse_wpi_json,
     PortRecord,
+    parse_wpi_json,
 )
 
 __all__ = [
@@ -95,10 +116,17 @@ __all__ = [
     "FetchResult",
     "AuthenticationRequiredError",
     "LiveSourceDisabledError",
+    "SourceAdapterError",
+    "SourceContractError",
+    "SourceContractUnavailableError",
+    "SourceLicenseRequiredError",
+    "SourceUnavailableError",
     "ParsedAlert",
     "ParsedForecast",
+    "ParsedMarineZone",
     "ParsedObservation",
     "ParsedPFZ",
+    "ParsedStation",
     "RawPayload",
     "SourceAdapter",
     # IMD CAP
@@ -109,6 +137,7 @@ __all__ = [
     "INCOISPfzFixtureAdapter",
     "INCOISPfzLiveAdapter",
     "parse_pfz_featurecollection",
+    "parse_live_pfz",
     # INCOIS ERDDAP
     "ErddapDataset",
     "ERDDAP_DEFAULT_BASE_URL",
@@ -133,10 +162,14 @@ __all__ = [
     "INCOISTideFixtureAdapter",
     "INCOISTideLiveAdapter",
     "parse_tide_observations",
+    "parse_tews_station_xml",
+    "parse_tews_observation_series",
     # INCOIS high wave alerts
     "INCOISHighWaveFixtureAdapter",
     "INCOISHighWaveLiveAdapter",
     "parse_high_wave_alerts",
+    "parse_live_high_wave_alerts",
+    "parse_alert_validity",
     # Hazards (cyclone / tsunami / storm surge)
     "CycloneFixtureAdapter",
     "CycloneLiveAdapter",
@@ -145,11 +178,19 @@ __all__ = [
     "parse_cyclone_bulletin",
     "parse_tsunami_bulletin",
     "parse_storm_surge_advisory",
-    # IMD Buoy
+    # OON Buoy (legacy IMD fixture names retained for compatibility)
     "IMDBuoyFixtureAdapter",
     "IMDBuoyLiveAdapter",
+    "INCOISBuoyLiveAdapter",
     "parse_buoy_html",
+    "parse_oon_station_catalog",
+    "parse_oon_backend_status",
+    "parse_oon_chart",
     "BuoyStructureError",
+    # Marine Regions EEZ
+    "MarineRegionsEEZLiveAdapter",
+    "build_india_eez_url",
+    "parse_india_eez",
     # NGA Ports
     "NGAPortFixtureAdapter",
     "NGAPortLiveAdapter",

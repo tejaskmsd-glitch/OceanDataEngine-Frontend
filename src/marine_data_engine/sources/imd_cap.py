@@ -235,8 +235,7 @@ class IMDCapLiveAdapter:
                     dt = dtparser.parse(pd.text.strip())
                     # Normalize to UTC to avoid mixing aware/naive in comparisons
                     if dt.tzinfo is None:
-                        from datetime import timezone
-                        dt = dt.replace(tzinfo=timezone.utc)
+                        dt = dt.replace(tzinfo=UTC)
                     return dt
                 except (ValueError, OverflowError, TypeError):
                     return None

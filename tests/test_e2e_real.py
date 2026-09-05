@@ -18,7 +18,7 @@ import pytest
 pytestmark = pytest.mark.real_source
 
 
-def _fetch_url(url: str, *, timeout: int = 15, verify_ssl: bool = True) -> bytes:
+def _fetch_url(url: str, *, timeout: int = 15) -> bytes:
     """Fetch a URL, returning raw bytes. Skips test on network failure."""
     try:
         import ssl
@@ -26,9 +26,6 @@ def _fetch_url(url: str, *, timeout: int = 15, verify_ssl: bool = True) -> bytes
         import certifi
 
         ctx = ssl.create_default_context(cafile=certifi.where())
-        if not verify_ssl:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers={"User-Agent": "MarineDataEngine/test"})
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
             return resp.read()
@@ -126,11 +123,11 @@ class TestINCOISErddapEndToEnd:
 
     def test_fetch_real_catalog(self):
         """Fetch the real ERDDAP catalog and verify ≥16 datasets."""
-        # INCOIS omits intermediate cert — use curl-fetched copy or skip
+        # Strict TLS verification: skip rather than disabling certificate checks.
         try:
             data = _fetch_url(
-                "https://erddap.incois.gov.in/erddap/info/index.json?page=1&itemsPerPage=1000",
-                verify_ssl=False,  # Known INCOIS TLS issue (V3-TLS)
+                "https://erddap.incois.gov.in/erddap/info/"
+                "index.json?page=1&itemsPerPage=1000"
             )
         except Exception:
             pytest.skip("INCOIS ERDDAP unreachable or TLS issue")
@@ -162,8 +159,8 @@ class TestINCOISErddapEndToEnd:
         """Fetch real per-dataset info and verify SST variables."""
         try:
             data = _fetch_url(
-                "https://erddap.incois.gov.in/erddap/info/NOAA_AVHRR_AMSR_datasets/index.json",
-                verify_ssl=False,
+                "https://erddap.incois.gov.in/erddap/info/"
+                "NOAA_AVHRR_AMSR_datasets/index.json"
             )
         except Exception:
             pytest.skip("INCOIS ERDDAP unreachable")

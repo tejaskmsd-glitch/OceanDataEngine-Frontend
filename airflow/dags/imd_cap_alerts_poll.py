@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
-
 from marine_common import publish_ingest_trigger
 
 RSS_INDEX = "https://cap-sources.s3.amazonaws.com/in-imd-en/rss.xml"
@@ -26,7 +25,7 @@ RSS_INDEX = "https://cap-sources.s3.amazonaws.com/in-imd-en/rss.xml"
     dagrun_timeout=pendulum.duration(minutes=10),
     tags=["marine", "imd", "alerts", "P0"],
     default_args={
-        "retries": 3, 
+        "retries": 3,
         "retry_delay": pendulum.duration(seconds=15),
         "execution_timeout": pendulum.duration(minutes=5),
     },

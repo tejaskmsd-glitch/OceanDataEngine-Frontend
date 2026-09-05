@@ -175,11 +175,13 @@ class MOSDACSearchAdapter:
         *,
         minute_limit: int = 30,
         daily_limit: int = 1000,
+        dataset_id: str | None = None,
     ) -> None:
         self.live_enabled = get_settings().service.enable_live_sources
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self.minute_limit = minute_limit
         self.daily_limit = daily_limit
+        self.dataset_id = dataset_id
 
     def _require_enabled(self) -> None:
         if not self.live_enabled:
@@ -264,7 +266,8 @@ class MOSDACSearchAdapter:
 
     def fetch(self, dataset_id: str | None = None, *, count: int = 50) -> FetchResult:
         self._require_enabled()
-        url = self._build_url(dataset_id, count, 0)
+        selected_dataset_id = dataset_id if dataset_id is not None else self.dataset_id
+        url = self._build_url(selected_dataset_id, count, 0)
         try:
             body = self._http_get(url)
         except (urllib.error.URLError, OSError, TimeoutError) as exc:

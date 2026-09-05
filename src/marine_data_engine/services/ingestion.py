@@ -15,6 +15,7 @@ can filter by ``quality_status``.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -33,9 +34,11 @@ from ..db.models import (
     Evidence,  # noqa: F401  (referenced by evidence service; import cohesion)
     Forecast,
     IngestionJob,
+    MarineZone,
     Observation,
     ProcessingJob,
     ProcessingRun,
+    Station,
 )
 from ..domain.events import (
     alert_created,
@@ -50,7 +53,15 @@ from ..domain.idempotency import make_idempotency_key
 from ..domain.qc import qc_geometry_record, qc_observation
 from ..messaging.queue import InMemoryQueue
 from ..metrics import RECORDS_PROCESSED_TOTAL, SOURCE_FETCH_TOTAL
-from ..sources.base import FetchResult, ParsedAlert, ParsedForecast, ParsedObservation, ParsedPFZ
+from ..sources.base import (
+    FetchResult,
+    ParsedAlert,
+    ParsedForecast,
+    ParsedMarineZone,
+    ParsedObservation,
+    ParsedPFZ,
+    ParsedStation,
+)
 from ..storage.raw_store import RawStore
 
 PROCESSING_VERSION = "1.0.0"
@@ -219,6 +230,10 @@ class IngestionService:
                 self._ingest_alert(alert, raw, run, summary)
             for pfz in result.pfz:
                 self._ingest_pfz(pfz, raw, run, summary)
+            for station in result.stations:
+                self._ingest_station(station, raw, run, summary)
+            for zone in result.marine_zones:
+                self._ingest_marine_zone(zone, raw, run, summary)
             for obs in result.observations:
                 self._ingest_observation(obs, raw, run, summary)
             for forecast in result.forecasts:
@@ -244,9 +259,10 @@ class IngestionService:
                     issued_at=cyclone.issue_time,
                     effective_from=cyclone.issue_time,
                     valid_until=None,
-                    source_url=None,
+                    source_url=cyclone.source_url,
                     provider=cyclone.provider,
                     source_dataset=cyclone.source_dataset,
+                    source_metadata=cyclone.source_metadata,
                 )
                 self._ingest_alert(alert, raw, run, summary)
             for tsunami in getattr(result, "tsunamis", []):
@@ -260,10 +276,17 @@ class IngestionService:
                 alert = ParsedAlert(
                     alert_uid=tsunami.event_id,
                     event_type="tsunami",
-                    severity=("extreme" if tsunami.alert_level in ("warning", "watch") else "severe"),
+                    severity=(
+                        "extreme"
+                        if tsunami.alert_level in ("warning", "watch")
+                        else "severe"
+                    ),
                     certainty="observed",
                     urgency="immediate",
-                    headline=f"Tsunami {tsunami.alert_level or 'alert'}: M{tsunami.magnitude or '?'}",
+                    headline=(
+                        f"Tsunami {tsunami.alert_level or 'alert'}: "
+                        f"M{tsunami.magnitude or '?'}"
+                    ),
                     description=(
                         f"Magnitude: {tsunami.magnitude}, Depth: {tsunami.depth} km, "
                         f"Status: {tsunami.tsunami_status}, "
@@ -274,9 +297,10 @@ class IngestionService:
                     issued_at=tsunami.earthquake_time,
                     effective_from=tsunami.earthquake_time,
                     valid_until=None,
-                    source_url=None,
+                    source_url=tsunami.source_url,
                     provider=tsunami.provider,
                     source_dataset=tsunami.source_dataset,
+                    source_metadata=tsunami.source_metadata,
                 )
                 self._ingest_alert(alert, raw, run, summary)
         except Exception as exc:  # noqa: BLE001
@@ -294,6 +318,10 @@ class IngestionService:
 
             prev_status = dataset.status
             dataset.last_failure_at = _now()
+            dataset.last_checked_at = _now()
+            dataset.last_result_count = 0
+            dataset.last_result_state = "processing_error"
+            dataset.status_detail = str(exc)
             dataset.consecutive_failures = (dataset.consecutive_failures or 0) + 1
             dataset.status = "failed"
 
@@ -334,10 +362,20 @@ class IngestionService:
         ingestion_job.finished_at = _now()
 
         prev_status = dataset.status
-        dataset.last_success_at = _now()
+        dataset.last_success_at = raw.retrieved_at
         dataset.last_processed_at = _now()
+        dataset.last_checked_at = _now()
+        dataset.last_result_count = result.record_count
+        dataset.last_result_state = result.result_state
+        dataset.status_detail = json.dumps(
+            {
+                "detail": result.status_detail,
+                "diagnostics": result.diagnostics,
+            },
+            separators=(",", ":"),
+        )
         dataset.consecutive_failures = 0
-        dataset.status = "healthy"
+        dataset.status = "degraded" if result.result_state == "degraded" else "healthy"
 
         # processing.completed event.
         completed_event = processing_completed(
@@ -382,6 +420,39 @@ class IngestionService:
             )
 
     # ------------------------------------------------------------------ #
+    def record_source_error(
+        self, provider: str, dataset_key: str, error: Exception
+    ) -> Dataset:
+        """Persist a fetch failure/block without manufacturing a raw payload.
+
+        Non-retryable disabled/license/contract states are operational facts,
+        not successful empty polls. Transport and contract failures increment
+        the failure counter; known blocks do not.
+        """
+        dataset = self._ensure_dataset(provider, dataset_key)
+        state = getattr(error, "result_state", "source_unavailable")
+        now = _now()
+        dataset.last_checked_at = now
+        dataset.last_result_count = 0
+        dataset.last_result_state = state
+        dataset.status_detail = str(error)
+        if state in {"disabled", "contract_unavailable", "license_gated"}:
+            dataset.status = "disabled"
+        elif state == "auth_blocked":
+            dataset.status = "degraded"
+        elif state == "contract_error":
+            dataset.status = "degraded"
+            dataset.last_failure_at = now
+            dataset.consecutive_failures = (dataset.consecutive_failures or 0) + 1
+        else:
+            dataset.status = "failed"
+            dataset.last_failure_at = now
+            dataset.consecutive_failures = (dataset.consecutive_failures or 0) + 1
+        SOURCE_FETCH_TOTAL.labels(provider, dataset_key, state).inc()
+        self.session.flush()
+        return dataset
+
+    # ------------------------------------------------------------------ #
     def _ensure_dataset(self, provider: str, dataset_key: str) -> Dataset:
         ds = self.session.execute(
             select(Dataset).where(Dataset.key == dataset_key)
@@ -398,7 +469,8 @@ class IngestionService:
             parameters=[],
             expected_update_interval_s=6 * 3600,
             priority=QueuePriority.NORMAL_INGESTION.value,
-            status="healthy",
+            status="disabled",
+            last_result_state="not_run",
         )
         self.session.add(ds)
         self.session.flush()
@@ -479,6 +551,7 @@ class IngestionService:
             provider=alert.provider,
             source_dataset=alert.source_dataset,
             source_url=alert.source_url,
+            source_metadata=alert.source_metadata,
             processing_version=PROCESSING_VERSION,
             issued_at=alert.issued_at,
             valid_from=alert.effective_from,
@@ -556,6 +629,7 @@ class IngestionService:
             provider=pfz.provider,
             source_dataset=pfz.source_dataset,
             source_url=pfz.source_url,
+            source_metadata=pfz.source_metadata,
             processing_version=PROCESSING_VERSION,
             issued_at=pfz.issue_time,
             valid_from=pfz.valid_from,
@@ -590,6 +664,94 @@ class IngestionService:
                     idempotency_key=f"event:pfz:{idem}",
                 )
 
+    def _ingest_station(
+        self,
+        station: ParsedStation,
+        raw,
+        run: ProcessingRun,
+        summary: IngestSummary,
+    ) -> None:
+        """Upsert authoritative station metadata and preserve upstream status."""
+        geometry = None
+        if station.latitude is not None and station.longitude is not None:
+            geometry = {
+                "type": "Point",
+                "coordinates": [station.longitude, station.latitude],
+            }
+        qc = qc_geometry_record(geometry=geometry, valid_from=None, valid_until=None)
+        idem = make_idempotency_key(
+            station.provider, station.source_dataset, station.station_uid
+        )
+        self._record_quality("station", idem, raw.dataset, qc, run)
+        self._tally(summary, qc)
+        if qc.status == QCStatus.REJECTED:
+            return
+
+        row = self.session.execute(
+            select(Station).where(Station.station_uid == station.station_uid)
+        ).scalar_one_or_none()
+        if row is None:
+            row = Station(station_uid=station.station_uid)
+            self.session.add(row)
+        row.name = station.name
+        row.station_type = station.station_type
+        row.latitude = station.latitude
+        row.longitude = station.longitude
+        row.provider = station.provider
+        row.source_dataset = station.source_dataset
+        row.source_url = station.source_url or raw.source_url
+        row.status = station.status
+        row.last_reported_at = station.last_reported_at
+        row.retrieved_at = raw.retrieved_at
+        row.source_metadata = station.source_metadata
+        row.updated_at = _now()
+
+    def _ingest_marine_zone(
+        self,
+        zone: ParsedMarineZone,
+        raw,
+        run: ProcessingRun,
+        summary: IngestSummary,
+    ) -> None:
+        """Upsert only source-provided authoritative zone geometry."""
+        qc = qc_geometry_record(
+            geometry=zone.geometry,
+            valid_from=zone.effective_from,
+            valid_until=zone.effective_until,
+        )
+        idem = make_idempotency_key(
+            zone.provider, zone.source_dataset, zone.zone_uid
+        )
+        self._record_quality("marine_zone", idem, raw.dataset, qc, run)
+        self._tally(summary, qc)
+        if qc.status == QCStatus.REJECTED:
+            return
+
+        row = self.session.execute(
+            select(MarineZone).where(MarineZone.zone_uid == zone.zone_uid)
+        ).scalar_one_or_none()
+        if row is None:
+            row = MarineZone(
+                zone_uid=zone.zone_uid,
+                zone_type=zone.zone_type,
+                name=zone.name,
+            )
+            self.session.add(row)
+        row.zone_type = zone.zone_type
+        row.name = zone.name
+        row.status = zone.status
+        row.restriction = zone.restriction
+        row.authority = zone.authority
+        row.geometry = zone.geometry
+        row.effective_from = zone.effective_from
+        row.effective_until = zone.effective_until
+        row.source = zone.provider
+        row.source_dataset = zone.source_dataset
+        row.source_url = zone.source_url or raw.source_url
+        row.retrieved_at = raw.retrieved_at
+        row.source_metadata = zone.source_metadata
+        row.updated_at = _now()
+
     def _ingest_observation(
         self,
         obs: ParsedObservation,
@@ -602,6 +764,7 @@ class IngestionService:
             obs.provider,
             obs.source_dataset,
             obs.station_id,
+            obs.sensor_id or "",
             obs.parameter,
             obs.observed_at,
         )
@@ -620,6 +783,7 @@ class IngestionService:
         row = Observation(
             station_id=obs.station_id,
             station_type=obs.station_type,
+            sensor_id=obs.sensor_id,
             latitude=obs.latitude,
             longitude=obs.longitude,
             parameter=obs.parameter,
@@ -627,7 +791,8 @@ class IngestionService:
             unit=obs.unit,
             provider=obs.provider,
             source_dataset=obs.source_dataset,
-            source_url=None,
+            source_url=obs.source_url or raw.source_url,
+            source_metadata=obs.source_metadata,
             processing_version=PROCESSING_VERSION,
             observed_at=obs.observed_at,
             retrieved_at=raw.retrieved_at,
@@ -707,7 +872,8 @@ class IngestionService:
             resolution=forecast.resolution,
             provider=forecast.provider,
             source_dataset=forecast.source_dataset,
-            source_url=None,
+            source_url=forecast.source_url or raw.source_url,
+            source_metadata=forecast.source_metadata,
             processing_version=PROCESSING_VERSION,
             valid_from=forecast.valid_from,
             forecast_time=forecast.forecast_time,

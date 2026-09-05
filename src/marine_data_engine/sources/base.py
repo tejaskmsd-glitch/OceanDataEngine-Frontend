@@ -43,6 +43,7 @@ class ParsedAlert:
     source_url: str | None
     provider: str = "IMD"
     source_dataset: str = "imd_cap"
+    source_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -63,6 +64,7 @@ class ParsedPFZ:
     source_url: str | None = None
     provider: str = "INCOIS"
     source_dataset: str = "incois_pfz"
+    source_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -85,6 +87,9 @@ class ParsedObservation:
     observed_at: datetime | None
     provider: str = "IMD"
     source_dataset: str = "imd_buoy"
+    source_url: str | None = None
+    sensor_id: str | None = None
+    source_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -110,6 +115,8 @@ class ParsedForecast:
     resolution: str | None = None
     provider: str = "IMD"
     source_dataset: str = "imd_nwp"
+    source_url: str | None = None
+    source_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -129,6 +136,8 @@ class ParsedCyclone:
     track_geometry: dict | None  # GeoJSON LineString
     provider: str = "IMD"
     source_dataset: str = "imd_rsmc"
+    source_url: str | None = None
+    source_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -146,6 +155,44 @@ class ParsedTsunami:
     affected_regions: list[str] | None
     provider: str = "INCOIS"
     source_dataset: str = "incois_tews"
+    source_url: str | None = None
+    source_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class ParsedStation:
+    """Authoritative upstream station metadata prior to ORM upsert."""
+
+    station_uid: str
+    name: str | None
+    station_type: str | None
+    latitude: float | None
+    longitude: float | None
+    status: str | None
+    provider: str
+    source_dataset: str
+    source_url: str | None = None
+    last_reported_at: datetime | None = None
+    source_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class ParsedMarineZone:
+    """Authoritative marine-zone geometry prior to ORM upsert."""
+
+    zone_uid: str
+    zone_type: str
+    name: str
+    geometry: dict
+    status: str | None = None
+    restriction: str | None = None
+    authority: str | None = None
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+    provider: str = "Marine Regions"
+    source_dataset: str = "marine_regions_eez"
+    source_url: str | None = None
+    source_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -159,6 +206,30 @@ class FetchResult:
     cyclones: list[ParsedCyclone] = field(default_factory=list)
     tsunamis: list[ParsedTsunami] = field(default_factory=list)
     forecasts: list[ParsedForecast] = field(default_factory=list)
+    stations: list[ParsedStation] = field(default_factory=list)
+    marine_zones: list[ParsedMarineZone] = field(default_factory=list)
+    # Source-level outcome is explicit so an empty but healthy response is not
+    # confused with a source that has never run or failed before parsing.
+    result_state: str = "success"  # success | empty | degraded
+    status_detail: str | None = None
+    diagnostics: list[str] = field(default_factory=list)
+
+    @property
+    def record_count(self) -> int:
+        """Number of canonical records emitted by this fetch."""
+        return sum(
+            len(records)
+            for records in (
+                self.alerts,
+                self.pfz,
+                self.observations,
+                self.cyclones,
+                self.tsunamis,
+                self.forecasts,
+                self.stations,
+                self.marine_zones,
+            )
+        )
 
 
 class SourceAdapter(Protocol):
@@ -171,13 +242,50 @@ class SourceAdapter(Protocol):
     def fetch(self) -> FetchResult: ...
 
 
-class LiveSourceDisabledError(RuntimeError):
+class SourceAdapterError(RuntimeError):
+    """Base error carrying a machine-readable dataset result state."""
+
+    result_state = "unavailable"
+    retryable = True
+
+
+class LiveSourceDisabledError(SourceAdapterError):
     """Raised when a live connector is invoked while disabled."""
 
+    result_state = "disabled"
+    retryable = False
 
-class AuthenticationRequiredError(RuntimeError):
-    """Raised when a connector requires credentials that are not configured.
 
-    Distinct from :class:`LiveSourceDisabledError`: the connector may be enabled
-    for live use, but cannot proceed because a username/password/token is blank.
-    """
+class AuthenticationRequiredError(SourceAdapterError):
+    """Raised when a verified connector requires unavailable credentials."""
+
+    result_state = "auth_blocked"
+    retryable = False
+
+
+class SourceContractUnavailableError(SourceAdapterError):
+    """Raised when no verified machine contract exists for the requested data."""
+
+    result_state = "contract_unavailable"
+    retryable = False
+
+
+class SourceLicenseRequiredError(SourceAdapterError):
+    """Raised when authoritative data reuse is blocked pending license approval."""
+
+    result_state = "license_gated"
+    retryable = False
+
+
+class SourceContractError(SourceAdapterError):
+    """Raised when a live response violates a verified upstream contract."""
+
+    result_state = "contract_error"
+    retryable = True
+
+
+class SourceUnavailableError(SourceAdapterError):
+    """Raised for transport/server failures after a live request was attempted."""
+
+    result_state = "source_unavailable"
+    retryable = True

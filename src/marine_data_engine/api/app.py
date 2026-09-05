@@ -9,12 +9,22 @@ canonical envelope and persists an Evidence record addressable at
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -124,11 +134,11 @@ def create_app() -> FastAPI:
     )
 
     # CORS — allow the dashboard and any local dev frontend to call the API.
-    from fastapi.middleware.cors import CORSMiddleware
-
     # H19 fix: wildcard + credentials is invalid per W3C spec.
     # Use explicit origins only; in production set MDE_CORS_ORIGINS env var.
     import os as _os  # noqa: PLC0415
+
+    from fastapi.middleware.cors import CORSMiddleware
     _cors_env = _os.environ.get("MDE_CORS_ORIGINS", "")
     cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else [
         "http://localhost:5173",
@@ -268,15 +278,28 @@ def create_app() -> FastAPI:
             )
             for r in rows
         ]
+        warnings, capability, source_states = _source_outcome(
+            db,
+            ("incois_pfz",),
+            subject="PFZ destination points/advisory lines for this query",
+            has_records=bool(rows),
+        )
         _persist_evidence(
-            db, rid, "/v1/fishing/pfz",
+            db,
+            rid,
+            "/v1/fishing/pfz",
             {"lat": lat, "lon": lon, "radius_km": radius_km},
-            sources, [{"pfz_uid": r["pfz_uid"]} for r in rows],
+            sources,
+            [{"pfz_uid": row["pfz_uid"]} for row in rows],
+            warnings=warnings,
+            capability_status=capability,
+            source_states=source_states,
         )
         return Envelope[list[PFZModel]](
             data=models,
             meta=Meta(generated_at=_now(), request_id=rid),
             sources=sources,
+            warnings=warnings,
         )
 
     # ------------------------------------------------------------------ #
@@ -316,15 +339,28 @@ def create_app() -> FastAPI:
             )
             for r in rows
         ]
+        warnings, capability, source_states = _source_outcome(
+            db,
+            ("imd_cap", "incois_hwa"),
+            subject="active marine alerts for this query",
+            has_records=bool(rows),
+        )
         _persist_evidence(
-            db, rid, "/v1/alerts",
+            db,
+            rid,
+            "/v1/alerts",
             {"lat": lat, "lon": lon, "radius_km": radius_km, "event_type": event_type},
-            sources, [{"alert_uid": r["alert_uid"]} for r in rows],
+            sources,
+            [{"alert_uid": row["alert_uid"]} for row in rows],
+            warnings=warnings,
+            capability_status=capability,
+            source_states=source_states,
         )
         return Envelope[list[AlertModel]](
             data=models,
             meta=Meta(generated_at=_now(), request_id=rid),
             sources=sources,
+            warnings=warnings,
         )
 
     # ------------------------------------------------------------------ #
@@ -387,10 +423,8 @@ def create_app() -> FastAPI:
             {"lat": lat, "lon": lon, "time": time.isoformat() if time else None,
              "radius_km": radius_km},
             rows,
-            empty_warning=(
-                "No ocean observations ingested yet (SST/chlorophyll/current/wave). "
-                "Ocean gridded connectors (INCOIS ERDDAP) are not yet enabled — see SOURCE_GAPS.md."
-            ),
+            dataset_keys=("incois_buoy", "incois_erddap"),
+            subject="ocean observations for the requested location/time",
         )
 
     @app.get(
@@ -419,10 +453,8 @@ def create_app() -> FastAPI:
             {"lat": lat, "lon": lon, "time": time.isoformat() if time else None,
              "radius_km": radius_km},
             rows,
-            empty_warning=(
-                "No ocean forecast data ingested yet. INCOIS ocean forecast connectors "
-                "are not yet enabled — see SOURCE_GAPS.md."
-            ),
+            dataset_keys=("imd_nwp",),
+            subject="numeric ocean forecasts for the requested location/time",
         )
 
     # ------------------------------------------------------------------ #
@@ -454,10 +486,8 @@ def create_app() -> FastAPI:
             {"lat": lat, "lon": lon, "time": time.isoformat() if time else None,
              "radius_km": radius_km},
             rows,
-            empty_warning=(
-                "No weather observations ingested yet (wind/pressure/rainfall). "
-                "IMD observation connectors are not yet enabled — see SOURCE_GAPS.md."
-            ),
+            dataset_keys=("incois_buoy",),
+            subject="verified buoy weather observations for the requested location/time",
         )
 
     @app.get(
@@ -486,10 +516,8 @@ def create_app() -> FastAPI:
             {"lat": lat, "lon": lon, "time": time.isoformat() if time else None,
              "radius_km": radius_km},
             rows,
-            empty_warning=(
-                "No weather forecast data ingested yet. IMD/GFS forecast connectors "
-                "are not yet enabled — see SOURCE_GAPS.md."
-            ),
+            dataset_keys=("imd_nwp",),
+            subject="numeric IMD weather forecasts for the requested location/time",
         )
 
     # ------------------------------------------------------------------ #
@@ -530,8 +558,8 @@ def create_app() -> FastAPI:
             []
             if rows
             else [
-                "No fisheries/ecosystem advisories ingested yet. "
-                "Tuna/Hilsa/HAB advisory connectors are not yet enabled — see SOURCE_GAPS.md."
+                "SOURCE_NOT_INGESTED: no authoritative Tuna/Hilsa/HAB advisory "
+                "dataset is registered or scheduled."
             ]
         )
         _persist_evidence(
@@ -641,11 +669,8 @@ def create_app() -> FastAPI:
             {"lat": lat, "lon": lon, "time": time.isoformat() if time else None,
              "radius_km": radius_km},
             rows,
-            empty_warning=(
-                "No tide/water-level data available. INCOIS tide-gauge machine access "
-                "is blocked pending HAR-D capture (entry-page-only source) — see "
-                "SOURCE_GAPS.md. Tide predictions are not inferred."
-            ),
+            dataset_keys=("incois_tide",),
+            subject="TEWS tide-gauge observations for the requested location/time",
         )
 
     # ------------------------------------------------------------------ #
@@ -930,9 +955,14 @@ def _persist_evidence(
     sources: list,
     refs: list,
     warnings: list | None = None,
+    *,
+    capability_status: str | None = None,
+    source_states: list[dict] | None = None,
 ) -> None:
     """Persist an evidence package with aggregate freshness/quality."""
-    src_dicts = [s.model_dump(mode="json") for s in sources]
+    src_dicts = [source.model_dump(mode="json") for source in sources]
+    states = source_states or []
+    json_states = json.loads(json.dumps(states, default=str))
     queries.save_evidence(
         db,
         request_id=rid,
@@ -941,9 +971,90 @@ def _persist_evidence(
         sources=src_dicts,
         record_refs=refs,
         confidence=1.0 if refs else None,
-        freshness={"result_count": len(refs)},
+        freshness={"result_count": len(refs), "source_states": json_states},
         quality={"result_count": len(refs)},
         warnings=warnings or [],
+        capability_status=capability_status or ("source_gap" if warnings else "available"),
+        data_versions={
+            state["dataset"]: str(
+                state.get("last_success_at")
+                or state.get("last_checked_at")
+                or "not_run"
+            )
+            for state in states
+        },
+        data_lineage=[
+            {
+                "source_url": source.get("source_url"),
+                "retrieved_at": source.get("retrieved_at"),
+            }
+            for source in src_dicts
+        ],
+    )
+
+
+def _source_outcome(
+    db: Session,
+    dataset_keys: tuple[str, ...],
+    *,
+    subject: str,
+    has_records: bool,
+) -> tuple[list[str], str, list[dict]]:
+    """Classify empty/partial API results from persisted source poll states."""
+    states = queries.get_dataset_source_states(db, dataset_keys)
+    blocked_states = {
+        "auth_blocked",
+        "contract_unavailable",
+        "license_gated",
+        "disabled",
+        "source_unavailable",
+        "contract_error",
+        "processing_error",
+        "not_run",
+        "not_registered",
+    }
+    if has_records:
+        partial = [state for state in states if state.get("state") in blocked_states]
+        if partial:
+            detail = ", ".join(
+                f"{state['dataset']}={state.get('state')}" for state in partial
+            )
+            return [f"PARTIAL_SOURCE_COVERAGE: {detail}"], "partial", states
+        return [], "available", states
+
+    result_states = {str(state.get("state") or "not_run") for state in states}
+    outcomes = (
+        ("auth_blocked", "SOURCE_AUTH_BLOCKED", "auth_blocked"),
+        ("contract_unavailable", "SOURCE_CONTRACT_UNAVAILABLE", "contract_unavailable"),
+        ("license_gated", "SOURCE_LICENSE_GATED", "license_gated"),
+        ("source_unavailable", "SOURCE_UNAVAILABLE", "source_unavailable"),
+        ("contract_error", "SOURCE_CONTRACT_ERROR", "source_unavailable"),
+        ("processing_error", "SOURCE_PROCESSING_ERROR", "source_unavailable"),
+        ("disabled", "SOURCE_DISABLED", "disabled"),
+    )
+    if result_states and result_states <= {"empty"}:
+        return (
+            [f"SOURCE_HEALTHY_EMPTY: upstream source is healthy but has no {subject}."],
+            "healthy_empty",
+            states,
+        )
+    for state_name, warning_code, capability in outcomes:
+        if state_name in result_states:
+            return (
+                [f"{warning_code}: {subject} is unavailable ({state_name})."],
+                capability,
+                states,
+            )
+    if result_states & {"not_run", "not_registered"} or not states:
+        return (
+            [f"SOURCE_NOT_INGESTED: {subject} has not yet been scheduled/ingested."],
+            "not_ingested",
+            states,
+        )
+    return (
+        [f"NO_MATCHING_RECORDS: source data is available but no {subject} matched."],
+        "available",
+        states,
     )
 
 
@@ -964,16 +1075,33 @@ def _sources_from_rows(rows: list[dict]) -> list[SourceRef]:
 
 
 def _observation_envelope(
-    db: Session, rid: str, endpoint: str, params: dict, rows: list[dict],
-    *, empty_warning: str,
+    db: Session,
+    rid: str,
+    endpoint: str,
+    params: dict,
+    rows: list[dict],
+    *,
+    dataset_keys: tuple[str, ...],
+    subject: str,
 ) -> Envelope[list[ObservationModel]]:
-    models = [ObservationModel(**r) for r in rows]
+    models = [ObservationModel(**row) for row in rows]
     sources = _sources_from_rows(rows)
-    warnings = [] if rows else [empty_warning]
+    warnings, capability, source_states = _source_outcome(
+        db,
+        dataset_keys,
+        subject=subject,
+        has_records=bool(rows),
+    )
     _persist_evidence(
-        db, rid, endpoint, params, sources,
-        [{"observation_uid": r["observation_uid"]} for r in rows],
+        db,
+        rid,
+        endpoint,
+        params,
+        sources,
+        [{"observation_uid": row["observation_uid"]} for row in rows],
         warnings=warnings,
+        capability_status=capability,
+        source_states=source_states,
     )
     return Envelope[list[ObservationModel]](
         data=models,
@@ -984,16 +1112,33 @@ def _observation_envelope(
 
 
 def _forecast_envelope(
-    db: Session, rid: str, endpoint: str, params: dict, rows: list[dict],
-    *, empty_warning: str,
+    db: Session,
+    rid: str,
+    endpoint: str,
+    params: dict,
+    rows: list[dict],
+    *,
+    dataset_keys: tuple[str, ...],
+    subject: str,
 ) -> Envelope[list[ForecastModel]]:
-    models = [ForecastModel(**r) for r in rows]
+    models = [ForecastModel(**row) for row in rows]
     sources = _sources_from_rows(rows)
-    warnings = [] if rows else [empty_warning]
+    warnings, capability, source_states = _source_outcome(
+        db,
+        dataset_keys,
+        subject=subject,
+        has_records=bool(rows),
+    )
     _persist_evidence(
-        db, rid, endpoint, params, sources,
-        [{"forecast_uid": r["forecast_uid"]} for r in rows],
+        db,
+        rid,
+        endpoint,
+        params,
+        sources,
+        [{"forecast_uid": row["forecast_uid"]} for row in rows],
         warnings=warnings,
+        capability_status=capability,
+        source_states=source_states,
     )
     return Envelope[list[ForecastModel]](
         data=models,
@@ -1006,30 +1151,63 @@ def _forecast_envelope(
 def _geofence_envelope(
     db: Session, rid: str, endpoint: str, params: dict, rows: list[dict],
 ) -> Envelope[list[ZoneModel]]:
-    """Convert geofence-service results into a zone envelope.
-
-    The service returns a single-element ``source_gap`` sentinel when no zones
-    are loaded; that is surfaced as an empty data list plus a SOURCE_GAP warning
-    rather than a phantom zone row.
-    """
-    source_gap = [r for r in rows if r.get("source_gap")]
-    zone_rows = [r for r in rows if not r.get("source_gap")]
-    models = [ZoneModel(**r) for r in zone_rows]
+    """Convert geofence results without confusing no match with no source."""
+    source_gap = [row for row in rows if row.get("source_gap")]
+    zone_rows = [row for row in rows if not row.get("source_gap")]
+    models = [ZoneModel(**row) for row in zone_rows]
     sources = [
-        SourceRef(provider=r.get("source") or "operator", dataset="marine_zone",
-                  source_url=r.get("source_url"))
-        for r in zone_rows
+        SourceRef(
+            provider=row.get("source") or "unknown",
+            dataset=row.get("source_dataset") or "marine_zone",
+            source_url=row.get("source_url"),
+            retrieved_at=row.get("retrieved_at"),
+        )
+        for row in zone_rows
     ]
-    if source_gap:
-        warnings = [r.get("warning", geofence_service.SOURCE_GAP_NO_ZONES) for r in source_gap]
-    elif not zone_rows:
-        warnings = [geofence_service.SOURCE_GAP_NO_ZONES]
+    coverage = geofence_service.zone_coverage(db)
+    source_states = queries.get_dataset_source_states(
+        db, ("marine_regions_eez_india",)
+    )
+    warnings = [
+        row.get("warning", geofence_service.SOURCE_GAP_NO_ZONES)
+        for row in source_gap
+    ]
+    warnings.extend(
+        f"ZONE_CATEGORY_NOT_LOADED: {category}"
+        for category, state in coverage.items()
+        if state.get("status") != "available"
+    )
+    eez_rows = [
+        row
+        for row in zone_rows
+        if str(row.get("zone_type") or "").lower()
+        in {"eez", "boundary", "international_boundary"}
+    ]
+    eez_warnings, eez_capability, _ = _source_outcome(
+        db,
+        ("marine_regions_eez_india",),
+        subject="authoritative India EEZ boundary geometry for this query",
+        has_records=bool(eez_rows),
+    )
+    warnings.extend(eez_warnings)
+    warnings = list(dict.fromkeys(warnings))
+    if zone_rows:
+        capability = "partial" if warnings else "available"
+    elif eez_capability not in {"available", "partial"}:
+        capability = eez_capability
     else:
-        warnings = []
+        capability = "source_gap" if warnings else "available"
+
     _persist_evidence(
-        db, rid, endpoint, params, sources,
-        [{"zone_uid": r["zone_uid"]} for r in zone_rows],
+        db,
+        rid,
+        endpoint,
+        params,
+        sources,
+        [{"zone_uid": row["zone_uid"]} for row in zone_rows],
         warnings=warnings,
+        capability_status=capability,
+        source_states=source_states,
     )
     return Envelope[list[ZoneModel]](
         data=models,
@@ -1087,8 +1265,9 @@ def _collect_risk_inputs(
     """Collect environmental risk factors from ingested observations/forecasts.
 
     Returns a ``(factors, sources)`` tuple. ``factors`` maps risk-engine keyword
-    arguments to nearest observed/forecast values. Empty when nothing is
-    ingested (the ocean/weather connectors are SOURCE_GAP-blocked).
+    arguments to nearest observed/forecast values. Empty when no matching
+    canonical inputs are present; callers use persisted dataset poll states to
+    distinguish not-run, healthy-empty, and blocked sources.
     """
     params = queries.OCEAN_PARAMETERS + queries.WEATHER_PARAMETERS
     factors: dict[str, float] = {}

@@ -5,6 +5,8 @@
 .env.*
 !.env.example
 *.pem
+# Public CA intermediate bundled for strict INCOIS chain validation (not a key/secret).
+!src/marine_data_engine/certs/globalsign-rsa-ov-ssl-ca-2018.pem
 *.key
 *.crt
 !intermediate-ca.crt.example
