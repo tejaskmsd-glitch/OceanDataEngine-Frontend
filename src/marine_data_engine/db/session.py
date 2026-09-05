@@ -25,7 +25,17 @@ def get_engine() -> Engine:
         connect_args: dict = {}
         if url.startswith("sqlite"):
             connect_args["check_same_thread"] = False
-        _engine = create_engine(url, future=True, connect_args=connect_args)
+        # H17 fix: pool_pre_ping validates connections before use, preventing
+        # stale-connection errors after PostgreSQL timeouts/restarts.
+        extra: dict = {}
+        if not url.startswith("sqlite"):
+            extra = {
+                "pool_pre_ping": True,
+                "pool_size": 5,
+                "max_overflow": 10,
+                "pool_recycle": 1800,
+            }
+        _engine = create_engine(url, future=True, connect_args=connect_args, **extra)
     return _engine
 
 

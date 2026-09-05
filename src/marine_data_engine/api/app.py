@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -123,16 +123,20 @@ def create_app() -> FastAPI:
     # CORS — allow the dashboard and any local dev frontend to call the API.
     from fastapi.middleware.cors import CORSMiddleware
 
+    # H19 fix: wildcard + credentials is invalid per W3C spec.
+    # Use explicit origins only; in production set MDE_CORS_ORIGINS env var.
+    import os as _os  # noqa: PLC0415
+    _cors_env = _os.environ.get("MDE_CORS_ORIGINS", "")
+    cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8000",
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://localhost:3000",
-            "http://localhost:8000",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:8000",
-            "*",  # dev convenience; tighten in production
-        ],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -821,10 +825,16 @@ def create_app() -> FastAPI:
     @app.post("/v1/internal/ingest-trigger", tags=["internal"], include_in_schema=False)
     async def internal_ingest_trigger(
         events: list[dict] = Body(default_factory=list),
+        x_internal_token: str | None = Header(None),
     ) -> dict:
         """Receive alert events produced by a worker after ingestion and fan
         them out to WebSocket subscribers via the AlertBroker.
         """
+        # C8 fix: require MDE_INTERNAL_TOKEN when configured.
+        import os  # noqa: PLC0415
+        expected = os.environ.get("MDE_INTERNAL_TOKEN", "")
+        if expected and x_internal_token != expected:
+            raise HTTPException(403, "Invalid or missing X-Internal-Token header")
         broker = get_broker()
         for event in events:
             await broker.publish(event)

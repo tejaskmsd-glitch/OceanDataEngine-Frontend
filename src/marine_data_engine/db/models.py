@@ -116,6 +116,10 @@ class DatasetAsset(Base):
     """A concrete stored artifact belonging to a dataset (raw or processed)."""
 
     __tablename__ = "dataset_asset"
+    __table_args__ = (
+        # H4 fix: prevent duplicate asset entries for the same dataset + URI.
+        UniqueConstraint("dataset_id", "storage_uri", name="uq_dataset_asset_uri"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     dataset_id: Mapped[int] = mapped_column(ForeignKey("dataset.id"), index=True)
@@ -172,7 +176,9 @@ class Observation(Base, _ProvenanceMixin):
 
     __tablename__ = "observation"
     __table_args__ = (
-        UniqueConstraint("idempotency_key", name="uq_observation_idem"),
+        # C3 fix: composite unique constraint matching the migration DDL.
+        # TimescaleDB requires the partition column in unique constraints.
+        UniqueConstraint("idempotency_key", "observed_at", name="uq_observation_idem"),
         Index("ix_observation_param_time", "parameter", "observed_at"),
     )
 
@@ -191,7 +197,9 @@ class Forecast(Base, _ProvenanceMixin):
 
     __tablename__ = "forecast"
     __table_args__ = (
-        UniqueConstraint("idempotency_key", name="uq_forecast_idem"),
+        # C3 fix: composite unique constraint matching the migration DDL.
+        # TimescaleDB requires the partition column in unique constraints.
+        UniqueConstraint("idempotency_key", "forecast_time", name="uq_forecast_idem"),
         Index("ix_forecast_param_valid", "parameter", "valid_from"),
     )
 

@@ -36,5 +36,12 @@ def publish_ingest_trigger(subject: str, payload: dict[str, Any]) -> None:
                 await nc.drain()
 
         asyncio.run(_send())
-    except Exception as exc:  # pragma: no cover - orchestration-time best effort
-        print(f"[marine] could not publish to NATS ({subject}): {exc}. payload={payload}")
+    except Exception as exc:  # pragma: no cover
+        # H9 fix: log properly and re-raise so Airflow marks the task as failed.
+        import logging
+        logging.getLogger("airflow.task").error(
+            "NATS publish failed for subject=%s: %s payload=%s", subject, exc, payload
+        )
+        raise RuntimeError(
+            f"Failed to publish ingest trigger to NATS ({subject}): {exc}"
+        ) from exc

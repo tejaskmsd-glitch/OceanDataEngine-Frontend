@@ -213,8 +213,11 @@ def query_alerts(
         distance = None
         if lat is not None and lon is not None:
             distance = _alert_distance_km(alert, lat, lon)
-            if radius_km is not None and distance is not None and distance > radius_km:
-                continue
+            if radius_km is not None:
+                # C6 fix: alerts without computable distance (no geometry)
+                # are excluded when a spatial radius filter is active.
+                if distance is None or distance > radius_km:
+                    continue
 
         out.append(
             {
@@ -509,6 +512,12 @@ def query_observations(
         .where(Observation.quality_status != QCStatus.REJECTED.value)
         .where(Observation.parameter.in_(parameters))
     )
+    # C4 fix: apply time window filter when `at` is specified.
+    if at is not None:
+        from datetime import timedelta  # noqa: PLC0415
+        window = timedelta(hours=24)
+        stmt = stmt.where(Observation.observed_at >= at - window)
+        stmt = stmt.where(Observation.observed_at <= at + window)
     out: list[dict] = []
     for obs in session.execute(stmt).scalars():
         distance = None
@@ -569,6 +578,12 @@ def query_forecasts(
         .where(Forecast.quality_status != QCStatus.REJECTED.value)
         .where(Forecast.parameter.in_(parameters))
     )
+    # C4 fix: apply time window filter when `at` is specified.
+    if at is not None:
+        from datetime import timedelta  # noqa: PLC0415
+        window = timedelta(hours=24)
+        stmt = stmt.where(Forecast.valid_from >= at - window)
+        stmt = stmt.where(Forecast.valid_from <= at + window)
     out: list[dict] = []
     for fc in session.execute(stmt).scalars():
         distance = None
