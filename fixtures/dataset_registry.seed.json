@@ -3,7 +3,12 @@
     "dataset_id": "imd_cap",
     "provider": "IMD",
     "product": "CAP 1.2 warnings via RSS-linked documents",
-    "parameters": ["warning", "cyclone", "high_wave", "marine_hazard"],
+    "parameters": [
+      "warning",
+      "cyclone",
+      "high_wave",
+      "marine_hazard"
+    ],
     "coverage": "India",
     "spatial_resolution": "source polygon/area description",
     "temporal_resolution": "event-driven",
@@ -22,7 +27,9 @@
     "dataset_id": "incois_erddap",
     "provider": "INCOIS",
     "product": "ERDDAP catalog and per-dataset metadata",
-    "parameters": ["catalog_metadata"],
+    "parameters": [
+      "catalog_metadata"
+    ],
     "coverage": "dataset dependent",
     "spatial_resolution": "dataset dependent",
     "temporal_resolution": "6 hours",
@@ -41,7 +48,9 @@
     "dataset_id": "mosdac_search",
     "provider": "MOSDAC",
     "product": "OpenSearch discovery catalog only",
-    "parameters": ["catalog_only"],
+    "parameters": [
+      "catalog_only"
+    ],
     "coverage": "India / Indian Ocean satellite products",
     "spatial_resolution": "product dependent",
     "temporal_resolution": "12 hours",
@@ -60,7 +69,10 @@
     "dataset_id": "incois_pfz",
     "provider": "INCOIS",
     "product": "Potential Fishing Zone destination points and advisory lines",
-    "parameters": ["pfz_destination_point", "pfz_advisory_line"],
+    "parameters": [
+      "pfz_destination_point",
+      "pfz_advisory_line"
+    ],
     "coverage": "Indian coast",
     "spatial_resolution": "Point and LineString (not polygon)",
     "temporal_resolution": "3 hours",
@@ -79,7 +91,10 @@
     "dataset_id": "incois_hwa",
     "provider": "INCOIS",
     "product": "High Wave Alert and Swell Surge Alert",
-    "parameters": ["high_wave", "swell_surge"],
+    "parameters": [
+      "high_wave",
+      "swell_surge"
+    ],
     "coverage": "Indian coastal districts",
     "spatial_resolution": "district MultiPolygon",
     "temporal_resolution": "15 minutes",
@@ -98,7 +113,9 @@
     "dataset_id": "incois_tide",
     "provider": "INCOIS",
     "product": "TEWS tide-gauge latest explicit sensor values",
-    "parameters": ["water_level"],
+    "parameters": [
+      "water_level"
+    ],
     "coverage": "TEWS station network",
     "spatial_resolution": "station point",
     "temporal_resolution": "10 minutes",
@@ -117,7 +134,10 @@
     "dataset_id": "incois_buoy",
     "provider": "INCOIS",
     "product": "OON moored-buoy latest wave and wind observations",
-    "parameters": ["significant_wave_height", "wind_speed"],
+    "parameters": [
+      "significant_wave_height",
+      "wind_speed"
+    ],
     "coverage": "Indian Ocean OON stations",
     "spatial_resolution": "station point",
     "temporal_resolution": "30 minutes polling; source dependent",
@@ -136,7 +156,12 @@
     "dataset_id": "imd_nwp",
     "provider": "IMD",
     "product": "Numeric marine NWP forecasts",
-    "parameters": ["wind", "wave", "pressure", "rainfall"],
+    "parameters": [
+      "wind",
+      "wave",
+      "pressure",
+      "rainfall"
+    ],
     "coverage": "unavailable",
     "spatial_resolution": "unavailable",
     "temporal_resolution": "unavailable",
@@ -156,7 +181,9 @@
     "dataset_id": "marine_regions_eez_india",
     "provider": "Marine Regions",
     "product": "India EEZ geometry from World EEZ v12",
-    "parameters": ["eez_boundary"],
+    "parameters": [
+      "eez_boundary"
+    ],
     "coverage": "India mainland and Andaman/Nicobar EEZ",
     "spatial_resolution": "MultiPolygon",
     "temporal_resolution": "release 2023-10-25",
@@ -171,5 +198,57 @@
     "status_detail": "Exact reusable terms have not been approved for this deployment",
     "source_url": "https://geo.vliz.be/geoserver/MarineRegions/wfs",
     "verification_status": "geometry/source verified; production reuse remains license-gated"
+  },
+  {
+    "dataset_id": "imd_marine_bulletin",
+    "provider": "IMD",
+    "product": "Coastal and Sea Area marine weather bulletins (ACWC/CWC)",
+    "parameters": [
+      "wind_speed",
+      "wind_gust",
+      "sea_state_category"
+    ],
+    "coverage": "IMD named coastal strips and Arabian Sea / Bay of Bengal sea areas",
+    "spatial_resolution": "named area (not a point forecast)",
+    "temporal_resolution": "12 h validity, issued about twice daily",
+    "format": "HTML bulletin (open, unauthenticated)",
+    "update_frequency": "30 minutes polling",
+    "access_method": "public HTML scrape of coastal_bulletin_new.php / seaarea_bulletin_new.php",
+    "authentication": "none required; the authenticated /api/*.php endpoints return HTTP 401 and are not used",
+    "license_policy": "public government bulletin; attribution to India Meteorological Department",
+    "priority": 1,
+    "status": "ENABLED",
+    "result_state": "not_run",
+    "status_detail": "Wind is numeric; sea state is a WMO 3700 category and is never stored as a wave height",
+    "source_url": "https://mausam.imd.gov.in/Forecast/coastal_bulletin_new.php?id=4",
+    "verification_status": "live contract verified"
+  },
+  {
+    "dataset_id": "incois_ww3",
+    "provider": "INCOIS",
+    "product": "WaveWatch III coastal wave forecast (RSMC)",
+    "parameters": [
+      "significant_wave_height",
+      "mean_wave_period",
+      "zero_crossing_wave_period",
+      "swell_height",
+      "mean_wave_direction",
+      "wind_speed",
+      "wind_direction"
+    ],
+    "coverage": "4.95-25.05N, 64.95-95.05E (Indian coastal domain)",
+    "spatial_resolution": "0.1 deg (~11 km)",
+    "temporal_resolution": "3 h, 56 steps (~7 day horizon)",
+    "format": "THREDDS NetcdfSubset (NCSS) point CSV over CF-NetCDF grid",
+    "update_frequency": "daily model init",
+    "access_method": "GET /thredds/ncss/grid/osf/ww3/rsmc_coast_ww3_<init>.nc (open, unauthenticated)",
+    "authentication": "none required",
+    "license_policy": "INCOIS open ocean services; attribution retained in provenance",
+    "priority": 1,
+    "status": "ACTIVE",
+    "result_state": "success",
+    "status_detail": "Numeric wave contract verified live; units resolved from CF long_name because the units attribute is published empty; NaN denotes the land mask and is never read as a value",
+    "source_url": "https://incois.gov.in/thredds/catalog/osf/ww3/catalog.xml",
+    "verification_status": "live contract verified"
   }
 ]

@@ -49,6 +49,14 @@ from .imd_cap import (
     IMDCapLiveAdapter,
     parse_cap_document,
 )
+from .imd_marine_bulletin import (
+    IMDMarineBulletinLiveAdapter,
+    parse_bulletin,
+    parse_wind_text,
+)
+from .imd_marine_bulletin import (
+    build_records as build_bulletin_records,
+)
 from .imd_nwp import (
     IMDNwpAdapter,
     IMDNwpFixtureAdapter,
@@ -86,6 +94,7 @@ from .incois_tide import (
     parse_tews_station_xml,
     parse_tide_observations,
 )
+from .incois_ww3 import IncoisWW3LiveAdapter
 from .marine_regions import (
     MarineRegionsEEZLiveAdapter,
     build_india_eez_url,
@@ -112,6 +121,7 @@ from .nga_ports import (
 )
 
 __all__ = [
+    "IncoisWW3LiveAdapter",
     # base
     "FetchResult",
     "AuthenticationRequiredError",
@@ -132,6 +142,10 @@ __all__ = [
     # IMD CAP
     "IMDCapFixtureAdapter",
     "IMDCapLiveAdapter",
+    "IMDMarineBulletinLiveAdapter",
+    "build_bulletin_records",
+    "parse_bulletin",
+    "parse_wind_text",
     "parse_cap_document",
     # INCOIS PFZ
     "INCOISPfzFixtureAdapter",

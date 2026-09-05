@@ -164,6 +164,53 @@ def _imd_nwp_adapter_factory(_settings, _payload):
     return IMDNwpAdapter()
 
 
+def _incois_ww3_adapter_factory(settings, payload):
+    from ..cache import build_bulletin_cache
+    from ..sources.incois_ww3 import IncoisWW3LiveAdapter
+
+    points = payload.get("points")
+    parsed_points = None
+    if points:
+        parsed_points = [(float(p[0]), float(p[1])) for p in points]
+    radius = payload.get("search_radius_km")
+    # The catalogue and dataset description are contract documents that change
+    # at most daily, so they are read through the Redis lazy cache; per-point
+    # NCSS queries always go upstream. The cache is fail-open.
+    cache = build_bulletin_cache(
+        getattr(settings.service, "redis_url", "") or None,
+        ttl_s=getattr(settings.service, "bulletin_cache_ttl_s", 900),
+    )
+    return IncoisWW3LiveAdapter(
+        points=parsed_points,
+        search_radius_km=float(radius) if radius is not None else None,
+        cache=cache,
+    )
+
+
+def _imd_marine_bulletin_adapter_factory(settings, payload):
+    from ..cache import build_bulletin_cache
+    from ..sources.imd_marine_bulletin import IMDMarineBulletinLiveAdapter
+
+    centre_ids = payload.get("centre_ids")
+    if isinstance(centre_ids, int):
+        centre_ids = [centre_ids]
+    if centre_ids is not None:
+        centre_ids = [int(c) for c in centre_ids]
+    kinds = payload.get("kinds")
+    if isinstance(kinds, str):
+        kinds = [kinds]
+    # Redis-backed lazy population; degrades to uncached when Redis is absent.
+    cache = build_bulletin_cache(
+        getattr(settings.service, "redis_url", "") or None,
+        ttl_s=getattr(settings.service, "bulletin_cache_ttl_s", 900),
+    )
+    return IMDMarineBulletinLiveAdapter(
+        centre_ids=centre_ids,
+        kinds=kinds,
+        cache=cache,
+    )
+
+
 def _incois_tide_adapter_factory(_settings, _payload):
     from ..sources.incois_tide import INCOISTideLiveAdapter
 
@@ -236,6 +283,16 @@ def default_handlers() -> dict[str, Handler]:
         "ingest.imd_nwp": _build_ingest_handler(
             _imd_nwp_adapter_factory, provider="IMD", dataset_key="imd_nwp"
         ),
+        "ingest.imd_marine_bulletin": _build_ingest_handler(
+            _imd_marine_bulletin_adapter_factory,
+            provider="IMD",
+            dataset_key="imd_marine_bulletin",
+        ),
+        "ingest.incois_ww3": _build_ingest_handler(
+            _incois_ww3_adapter_factory,
+            provider="INCOIS",
+            dataset_key="incois_ww3",
+        ),
         "ingest.incois_tide": _build_ingest_handler(
             _incois_tide_adapter_factory,
             provider="INCOIS",
@@ -282,6 +339,8 @@ _INGEST_ROLE_TYPES = {
     "ingest.incois_buoy",
     "ingest.imd_buoy",
     "ingest.imd_nwp",
+    "ingest.imd_marine_bulletin",
+    "ingest.incois_ww3",
     "ingest.incois_tide",
     "ingest.incois_erddap",
     "ingest.mosdac_search",

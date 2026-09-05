@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .risk import RiskAssessment, RiskThresholds, assess_marine_risk
+from .sea_state import SeaStateBand, parse_sea_state_category
 
 # ── Decision statuses ──────────────────────────────────────────────────────
 STATUS_CLEARED = "CLEARED"
@@ -43,6 +44,14 @@ REASON_WAVE_UNAVAILABLE = "WAVE_FORECAST_UNAVAILABLE"
 REASON_WIND_UNAVAILABLE = "WIND_DATA_UNAVAILABLE"
 REASON_TIDE_UNAVAILABLE = "TIDE_DATA_UNAVAILABLE"
 REASON_SEA_STATE_UNKNOWN = "SEA_STATE_UNKNOWN"
+# Sea state established only from an authoritative *categorical* bulletin term
+# (e.g. IMD "MODERATE TO ROUGH") rather than a measured/forecast height. This is
+# informational, not a block, but it permanently caps the verdict at
+# CLEARED_WITH_CAUTION — a word is not a measurement.
+REASON_SEA_STATE_FROM_CATEGORY = "SEA_STATE_DERIVED_FROM_CATEGORY"
+# A sea-state term was supplied but is not in the verified WMO 3700 vocabulary.
+# Treated as missing evidence, never as calm water.
+REASON_SEA_STATE_CATEGORY_UNRECOGNISED = "SEA_STATE_CATEGORY_UNRECOGNISED"
 REASON_ROUTE_RISK_INCOMPLETE = "ENVIRONMENTAL_ROUTE_RISK_INCOMPLETE"
 REASON_ZONE_STATUS_UNKNOWN = "RESTRICTED_ZONE_OPERATIONAL_STATUS_UNKNOWN"
 # Hazard codes (drive a risk-based NOT_CLEARED even with full data).
@@ -66,6 +75,8 @@ class SafetyDecision:
     # The underlying risk assessment, when it could be computed (inputs present).
     risk: RiskAssessment | None = None
     notes: list[str] = field(default_factory=list)
+    # Populated only when sea state was established from a categorical term.
+    sea_state: SeaStateBand | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -75,6 +86,7 @@ class SafetyDecision:
             "missing_inputs": list(self.missing_inputs),
             "risk": self.risk.as_dict() if self.risk is not None else None,
             "notes": list(self.notes),
+            "sea_state": self.sea_state.as_dict() if self.sea_state is not None else None,
         }
 
 
@@ -96,6 +108,7 @@ def evaluate_safety_gate(
     swell_height: float | None = None,
     wave_period: float | None = None,
     wind_gust: float | None = None,
+    sea_state_category: str | None = None,
     rainfall: float | None = None,
     pressure_trend: float | None = None,
     active_warnings: list[dict] | None = None,
@@ -133,12 +146,38 @@ def evaluate_safety_gate(
     has_wind = _present(wind_speed)
     has_tide = _present(tide_level)
 
+    # ── 0. Categorical sea state (authoritative word, not a measurement) ───
+    # Some bulletins publish only a WMO 3700 / Douglas term. It is accepted as
+    # a *fallback* sea-state input when no measured or forecast height exists.
+    # The band's upper bound is used so a coarse term can only ever make the
+    # decision more pessimistic. Unverified vocabulary is rejected outright.
+    sea_state: SeaStateBand | None = None
+    derived_wave_height: float | None = None
+    if not (has_wave or has_swell) and sea_state_category is not None:
+        sea_state = parse_sea_state_category(sea_state_category)
+        if sea_state is None:
+            reasons.append(REASON_SEA_STATE_CATEGORY_UNRECOGNISED)
+        else:
+            derived_wave_height = sea_state.conservative_height_m
+
+    has_derived_sea_state = derived_wave_height is not None
+
     # ── 1. Required-evidence gate (UNKNOWN vs LOW) ─────────────────────────
-    # Sea state must be established by an actual wave or swell measurement.
-    if not (has_wave or has_swell):
+    # Sea state must be established by a wave/swell value or an authoritative
+    # categorical term.
+    if not (has_wave or has_swell or has_derived_sea_state):
         missing.append("sea_state")
         reasons.append(REASON_WAVE_UNAVAILABLE)
         reasons.append(REASON_SEA_STATE_UNKNOWN)
+    elif has_derived_sea_state:
+        reasons.append(REASON_SEA_STATE_FROM_CATEGORY)
+        notes.append(
+            "Sea state was derived from the authoritative categorical term "
+            f"{sea_state.category!r} via {sea_state.labels} "
+            f"(WMO 3700 band {sea_state.min_height_m}-{sea_state.max_height_m} m); "
+            f"the conservative upper bound {sea_state.conservative_height_m} m was used. "
+            "This is not a measured wave height."
+        )
     if not has_wind:
         missing.append("wind")
         reasons.append(REASON_WIND_UNAVAILABLE)
@@ -171,9 +210,9 @@ def evaluate_safety_gate(
 
     # ── 2. Compute environmental risk when the core inputs exist ───────────
     risk: RiskAssessment | None = None
-    if (has_wave or has_swell) and has_wind:
+    if (has_wave or has_swell or has_derived_sea_state) and has_wind:
         risk = assess_marine_risk(
-            wave_height=wave_height,
+            wave_height=wave_height if has_wave else derived_wave_height,
             wave_period=wave_period,
             swell_height=swell_height,
             wind_speed=wind_speed,
@@ -216,6 +255,16 @@ def evaluate_safety_gate(
         notes.append(
             "Conditions are marginal; proceed only with active monitoring and an abort plan."
         )
+    elif has_derived_sea_state:
+        # Inputs present and risk benign, but sea state came from a coarse
+        # category rather than a measurement. Never award a full clearance on
+        # that basis.
+        status = STATUS_CLEARED_WITH_CAUTION
+        notes.append(
+            "Capped at CLEARED_WITH_CAUTION: sea state rests on a categorical "
+            "bulletin term, not a measured or modelled wave height. Obtain a "
+            "numeric sea-state source before treating this as a full clearance."
+        )
     else:
         status = STATUS_CLEARED
         notes.append("Required inputs present and conditions assessed as low risk.")
@@ -231,4 +280,5 @@ def evaluate_safety_gate(
         missing_inputs=missing,
         risk=risk,
         notes=notes,
+        sea_state=sea_state,
     )

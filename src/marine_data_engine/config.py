@@ -112,6 +112,18 @@ class ServiceSettings(BaseSettings):
     # Datasets are considered stale past this multiple of their expected
     # update interval unless a per-dataset override is configured.
     default_stale_multiplier: float = 3.0
+    # Redis is used only as a lazy-population / single-flight cache in front of
+    # scraped upstream documents. It is strictly optional: an unset URL or an
+    # unreachable server degrades to uncached direct fetches, never to failure.
+    redis_url: str = ""
+    bulletin_cache_ttl_s: int = 900
+    # Bounded radius for resolving a requested coordinate to a wet WaveWatch III
+    # grid node. An unbounded search could answer a coastal query with an
+    # open-ocean node far offshore and still look plausible.
+    ww3_search_radius_km: float = 30.0
+    # Sent when scraping public government bulletin pages. Operators should set
+    # an identifying contact string; generic agents are commonly rejected.
+    imd_bulletin_user_agent: str = "MarineDataEngine/0.1 (+marine-data-engine)"
 
 
 class Settings(BaseSettings):

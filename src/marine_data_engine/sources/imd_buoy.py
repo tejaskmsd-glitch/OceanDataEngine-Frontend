@@ -26,6 +26,7 @@ from dateutil import parser as dtparser
 
 from ..config import get_settings
 from ..domain.normalize import normalize_pressure, normalize_sst, normalize_wind
+from ..domain.unit_labels import UnitContractError, UnknownUnitError, require_unit
 from .base import (
     FetchResult,
     LiveSourceDisabledError,
@@ -368,12 +369,17 @@ class _OptionParser(HTMLParser):
             self._text = []
 
 
-_OON_PARAMETER_SPECS: dict[str, tuple[str, set[str], set[str]]] = {
-    "wind_speed": ("wind_speed", {"Wind Speed"}, {"m/s"}),
+# parameter token -> (canonical parameter, accepted chart labels, REQUIRED
+# canonical unit). The unit is the canonical name, not a literal spelling: the
+# chart legend legitimately says "Meters" where the canonical unit is "m", and
+# resolution is delegated to ..domain.unit_labels so a synonym is accepted while
+# a genuinely different quantity is still refused.
+_OON_PARAMETER_SPECS: dict[str, tuple[str, set[str], str]] = {
+    "wind_speed": ("wind_speed", {"Wind Speed"}, "m/s"),
     "hm0": (
         "significant_wave_height",
         {"Significant Wave Height", "Wave Height"},
-        {"m"},
+        "m",
     ),
 }
 _DATA_START_RE = re.compile(r"\bdata\s*:\s*\[")
@@ -481,7 +487,7 @@ def parse_oon_chart(
     spec = _OON_PARAMETER_SPECS.get(parameter_token)
     if spec is None:
         raise SourceContractError(f"unverified OON parameter token {parameter_token!r}")
-    canonical_parameter, expected_labels, expected_units = spec
+    canonical_parameter, expected_labels, required_unit = spec
     html = html_bytes.decode("utf-8", errors="replace")
 
     option_parser = _OptionParser()
@@ -511,10 +517,19 @@ def parse_oon_chart(
     if unit_match is None:
         raise BuoyStructureError("OON chart unit was not found")
     source_unit = unit_match.group("unit").strip()
-    if source_unit not in expected_units:
-        raise BuoyStructureError(
-            f"OON parameter/unit mismatch: {parameter_token!r} -> {source_unit!r}"
+    # The chart states its unit in human-readable form ("Meters"). Resolve it to
+    # a canonical unit and assert it is the quantity this parameter requires.
+    # An unrecognised label, or a recognised label denoting a different
+    # quantity, is a structural canary -- never a silently accepted value.
+    try:
+        canonical_chart_unit = require_unit(
+            source_unit, required_unit, context=f"oon.{parameter_token}"
         )
+    except (UnknownUnitError, UnitContractError) as exc:
+        raise BuoyStructureError(
+            f"OON parameter/unit mismatch: {parameter_token!r} -> "
+            f"{source_unit!r}: {exc}"
+        ) from exc
 
     data_start = _DATA_START_RE.search(html)
     if data_start is None:
@@ -549,7 +564,7 @@ def parse_oon_chart(
         longitude=station.longitude,
         parameter=canonical_parameter,
         value=value,
-        unit=source_unit,
+        unit=canonical_chart_unit,
         observed_at=observed_at,
         provider="INCOIS",
         source_dataset="incois_buoy",
@@ -561,6 +576,7 @@ def parse_oon_chart(
             "parameter_token": parameter_token,
             "selected_parameter_label": selected_label,
             "chart_unit": source_unit,
+            "chart_unit_canonical": canonical_chart_unit,
             "chart_time_axis": "UTC",
             "history_policy": "only final valid pair parsed",
         },

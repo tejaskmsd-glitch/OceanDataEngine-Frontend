@@ -149,6 +149,7 @@ synchronous API requests (prompt §4).
 | `incois_pfz_poll` | every 3 h | Trigger native PFZ Point + LineString ingest | live contract verified |
 | `incois_tews_tide_poll` | every 10 min | Enumerate TEWS stations and ingest explicit latest sensor values | live contract verified |
 | `incois_oon_buoy_poll` | twice hourly | Enumerate active OON stations and ingest strict wave/wind chart values | live contract verified |
+| `incois_ww3_poll` | every 3 h | Trigger INCOIS WaveWatch III numeric wave/period/swell/wind point forecasts | live contract verified |
 | `incois_erddap_ingest` | every 6 h | Trigger per-dataset ERDDAP metadata ingest | catalog verified |
 | `mosdac_search_registry` | every 12 h | Discovery → registry (downloads excluded) | search verified |
 | `dataset_freshness_sweep` | every 5 min | Recompute dataset freshness/staleness | platform |

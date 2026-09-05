@@ -833,6 +833,13 @@ class IngestionService:
         summary: IngestSummary,
     ) -> None:
         """Map a :class:`ParsedForecast` -> ``Forecast`` ORM row with QC."""
+        # Area-scoped forecasts (e.g. IMD coastal/sea-area bulletins) carry no
+        # coordinates, so latitude/longitude cannot discriminate between areas.
+        # Without an area component in the key, every area in a bulletin would
+        # collapse into a single "duplicate" and all but the first would be
+        # silently discarded. Include the verbatim area name when present.
+        meta = forecast.source_metadata or {}
+        area_scope = meta.get("area_description") or ""
         idem = make_idempotency_key(
             forecast.provider,
             forecast.source_dataset,
@@ -841,6 +848,7 @@ class IngestionService:
             forecast.latitude,
             forecast.longitude,
             forecast.valid_from,
+            area_scope,
         )
         if self._exists(Forecast, idem):
             summary.skipped_duplicates += 1
@@ -852,13 +860,29 @@ class IngestionService:
         # future"). Use the forecast's production/issue time (``forecast_time``
         # / model cycle) as the temporal reference instead — that is at or
         # before "now". Range/spatial/schema checks still apply to the value.
-        qc = qc_observation(
-            parameter=forecast.parameter,
-            value=forecast.value,
-            latitude=forecast.latitude,
-            longitude=forecast.longitude,
-            observed_at=forecast.forecast_time,
-        )
+        #
+        # Categorical parameters (e.g. ``sea_state_category``) intentionally
+        # carry ``value=None``: the authoritative source published a word, not a
+        # number, and inventing a number is exactly what this engine refuses to
+        # do. Such a record is valid and must not be quarantined as a missing
+        # value; its meaning lives in ``source_metadata``.
+        is_categorical = forecast.value is None and bool(meta.get("sea_state_category"))
+        if is_categorical:
+            qc = qc_observation(
+                parameter=forecast.parameter,
+                value=0.0,  # placeholder for range checks only; not persisted
+                latitude=forecast.latitude,
+                longitude=forecast.longitude,
+                observed_at=forecast.forecast_time,
+            )
+        else:
+            qc = qc_observation(
+                parameter=forecast.parameter,
+                value=forecast.value,
+                latitude=forecast.latitude,
+                longitude=forecast.longitude,
+                observed_at=forecast.forecast_time,
+            )
 
         row = Forecast(
             model_name=forecast.model_name,

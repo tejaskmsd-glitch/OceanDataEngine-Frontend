@@ -36,6 +36,11 @@ x-common-env: &common-env
   MDE_S3_IN_MEMORY: "false"
   MDE_NATS_SERVERS: ${NATS_URL}
   MDE_ENABLE_LIVE_SOURCES: ${MDE_ENABLE_LIVE_SOURCES:-true}
+  # Optional cache. Unreachable Redis degrades to uncached fetches, never failure.
+  MDE_REDIS_URL: ${MDE_REDIS_URL:-redis://redis:6379/0}
+  MDE_WW3_SEARCH_RADIUS_KM: ${MDE_WW3_SEARCH_RADIUS_KM:-30.0}
+  MDE_BULLETIN_CACHE_TTL_S: ${MDE_BULLETIN_CACHE_TTL_S:-900}
+  MDE_IMD_BULLETIN_USER_AGENT: ${MDE_IMD_BULLETIN_USER_AGENT:-MarineDataEngine/0.1 (+marine-data-engine)}
   INCOIS_CA_BUNDLE: ${INCOIS_CA_BUNDLE:-}
   MARINE_REGIONS_LICENSE_ACKNOWLEDGEMENT: ${MARINE_REGIONS_LICENSE_ACKNOWLEDGEMENT:-}
   MDE_LOG_JSON: "true"
@@ -142,6 +147,25 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis — lazy-population / single-flight cache in front of scraped upstream
+  # documents. Strictly optional: if this service is down the engine degrades to
+  # uncached direct fetches rather than failing, so it is never a single point
+  # of failure in the safety path.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4.1-bookworm
+    <<: *restart-policy
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   # ---------------------------------------------------------------------------
   # OpenTelemetry Collector

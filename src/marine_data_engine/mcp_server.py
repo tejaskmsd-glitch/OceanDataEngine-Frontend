@@ -780,6 +780,7 @@ def evaluate_safety_clearance(
     swell_height: float | None = None,
     wave_period: float | None = None,
     wind_gust: float | None = None,
+    sea_state_category: str | None = None,
     rainfall: float | None = None,
     pressure_trend: float | None = None,
     active_warnings: list[dict] | None = None,
@@ -797,6 +798,14 @@ def evaluate_safety_clearance(
     if either is missing it returns ``NOT_CLEARED`` with ``insufficient_data``
     true, distinguishing *unknown risk* from *low risk*.
 
+    ``sea_state_category`` is a fallback sea-state input for authoritative
+    bulletins that publish only a WMO 3700 / Douglas term (e.g. IMD's
+    ``"MODERATE TO ROUGH"``). It is mapped to that published height band and the
+    band's **upper** bound is used, so a coarse term can only make the verdict
+    more pessimistic. A category is never treated as a measurement: it caps the
+    result at ``CLEARED_WITH_CAUTION``, and unrecognised vocabulary counts as
+    missing evidence rather than calm water.
+
     Use this LAST, after querying observations/forecasts/alerts/geofence, to
     turn the gathered evidence into a structured verdict. Returns
     ``safety_status`` (CLEARED / CLEARED_WITH_CAUTION / NOT_CLEARED), a list of
@@ -813,6 +822,7 @@ def evaluate_safety_clearance(
         swell_height=swell_height,
         wave_period=wave_period,
         wind_gust=wind_gust,
+        sea_state_category=sea_state_category,
         rainfall=rainfall,
         pressure_trend=pressure_trend,
         active_warnings=active_warnings,
@@ -840,6 +850,7 @@ def evaluate_safety_clearance(
             "swell_height": swell_height,
             "wave_period": wave_period,
             "wind_gust": wind_gust,
+            "sea_state_category": sea_state_category,
             "rainfall": rainfall,
             "pressure_trend": pressure_trend,
             "active_warnings": active_warnings,
