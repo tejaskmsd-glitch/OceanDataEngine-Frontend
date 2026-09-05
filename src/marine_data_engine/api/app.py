@@ -9,6 +9,7 @@ canonical envelope and persists an Evidence record addressable at
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -81,8 +82,9 @@ def publish_alert_sync(event: dict, broker: AlertBroker | None = None) -> None:
     """Schedule a broker publish from synchronous code.
 
     Safe to call from a sync producer (like IngestionService). If a running
-    event loop exists, the publish is scheduled as a task; otherwise the event
-    is published synchronously via a transient loop. Never raises to callers.
+    event loop exists, the publish is scheduled as a task on that loop;
+    otherwise the event is silently dropped (logged) since there are no
+    WebSocket subscribers to receive it without an active server loop.
     """
     broker = broker or get_broker()
     try:
@@ -92,10 +94,11 @@ def publish_alert_sync(event: dict, broker: AlertBroker | None = None) -> None:
     if loop is not None and loop.is_running():
         loop.create_task(broker.publish(event))
     else:
-        try:
-            asyncio.run(broker.publish(event))
-        except Exception:  # noqa: BLE001
-            pass
+        # No running loop means no WebSocket subscribers — skip rather than
+        # creating a transient loop that can't reach the server's queues.
+        logging.getLogger(__name__).debug(
+            "publish_alert_sync: no running event loop, alert event dropped"
+        )
 
 
 def get_db() -> Iterator[Session]:

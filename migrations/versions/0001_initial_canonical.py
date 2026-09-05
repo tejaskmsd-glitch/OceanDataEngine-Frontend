@@ -175,10 +175,11 @@ def upgrade() -> None:
             storage_uri       VARCHAR(1024) NOT NULL,
             media_type        VARCHAR(128),
             checksum_sha256   VARCHAR(64),
-            size_bytes        INTEGER,
+            size_bytes        BIGINT,
             ingestion_job_id  INTEGER,
             retrieved_at      TIMESTAMPTZ,
-            created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT uq_dataset_asset_uri UNIQUE (dataset_id, storage_uri)
         );
     """)
     op.execute("CREATE INDEX IF NOT EXISTS ix_dataset_asset_dataset_id ON dataset_asset (dataset_id);")
@@ -242,7 +243,7 @@ def upgrade() -> None:
             headline         TEXT,
             description      TEXT,
             area_description TEXT,
-            geometry         TEXT,
+            geometry         geometry(Geometry, 4326),
             bbox_minx        DOUBLE PRECISION,
             bbox_miny        DOUBLE PRECISION,
             bbox_maxx        DOUBLE PRECISION,
@@ -255,6 +256,7 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS ix_alert_idempotency_key ON alert (idempotency_key);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_alert_alert_uid ON alert (alert_uid);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_alert_event_type ON alert (event_type);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_alert_geometry ON alert USING GIST (geometry);")
 
     # ---- advisory --------------------------------------------------------
     op.execute(f"""
@@ -266,13 +268,14 @@ def upgrade() -> None:
             species_or_ecosystem  VARCHAR(128),
             region                VARCHAR(255),
             recommendation        TEXT,
-            geometry              TEXT,
+            geometry              geometry(Geometry, 4326),
             CONSTRAINT uq_advisory_idem UNIQUE (idempotency_key)
         );
     """)
     op.execute("CREATE INDEX IF NOT EXISTS ix_advisory_provider ON advisory (provider);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_advisory_advisory_uid ON advisory (advisory_uid);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_advisory_advisory_type ON advisory (advisory_type);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_advisory_geometry ON advisory USING GIST (geometry);")
 
     # ---- pfz -------------------------------------------------------------
     op.execute(f"""
@@ -286,7 +289,7 @@ def upgrade() -> None:
             sst_context         DOUBLE PRECISION,
             chlorophyll_context DOUBLE PRECISION,
             confidence          DOUBLE PRECISION,
-            geometry            TEXT,
+            geometry            geometry(Geometry, 4326),
             centroid_lat        DOUBLE PRECISION,
             centroid_lon        DOUBLE PRECISION,
             CONSTRAINT uq_pfz_idem UNIQUE (idempotency_key)
@@ -297,6 +300,7 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS ix_pfz_idempotency_key ON pfz (idempotency_key);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_pfz_pfz_uid ON pfz (pfz_uid);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_pfz_validity ON pfz (valid_from, valid_until);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_pfz_geometry ON pfz USING GIST (geometry);")
 
     # --------------------------------------------------------------------- #
     # Reference / geospatial entities
@@ -342,7 +346,7 @@ def upgrade() -> None:
             status          VARCHAR(64),
             restriction     TEXT,
             authority       VARCHAR(255),
-            geometry        TEXT,
+            geometry        geometry(Geometry, 4326),
             effective_from  TIMESTAMPTZ,
             effective_until TIMESTAMPTZ,
             source          VARCHAR(64),
@@ -351,6 +355,7 @@ def upgrade() -> None:
         );
     """)
     op.execute("CREATE INDEX IF NOT EXISTS ix_marine_zone_zone_type ON marine_zone (zone_type);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_marine_zone_geometry ON marine_zone USING GIST (geometry);")
 
     # --------------------------------------------------------------------- #
     # Processing / lineage entities
@@ -368,13 +373,14 @@ def upgrade() -> None:
             idempotency_key VARCHAR(255) NOT NULL,
             error_code      VARCHAR(128),
             error_detail    TEXT,
-            bytes_fetched   INTEGER,
+            bytes_fetched   BIGINT,
             queued_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
             started_at      TIMESTAMPTZ,
             finished_at     TIMESTAMPTZ
         );
     """)
     op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_ingestion_job_job_uid ON ingestion_job (job_uid);")
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_ingestion_job_idem ON ingestion_job (idempotency_key);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_ingestion_job_status ON ingestion_job (status);")
 
     # Now that ingestion_job exists, wire the deferred FK from dataset_asset.

@@ -71,7 +71,7 @@ bootstrap: ## One-command bring-up: env -> build -> up -> wait -> migrate -> see
 	@bash scripts/wait_for_healthy.sh postgres 120
 	@$(MAKE) migrate
 	@$(MAKE) seed-registry
-	@echo "Bootstrap complete. API: http://localhost:$${API_PORT:-8000}  Dashboard: http://localhost:$${DASHBOARD_PORT:-5173}  Grafana: http://localhost:$${GRAFANA_PORT:-3000}  Airflow: http://localhost:$${AIRFLOW_WEB_PORT:-8080}"
+	@echo "Bootstrap complete. API: http://localhost:$${API_PORT:-8000}  MCP: http://localhost:$${MCP_PORT:-9100}/mcp  Dashboard: http://localhost:$${DASHBOARD_PORT:-5173}  Grafana: http://localhost:$${GRAFANA_PORT:-3000}  Airflow: http://localhost:$${AIRFLOW_WEB_PORT:-8080}"
 
 # ---------------------------------------------------------------------------
 # Validation

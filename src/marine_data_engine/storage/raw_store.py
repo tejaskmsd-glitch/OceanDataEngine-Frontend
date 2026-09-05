@@ -113,7 +113,17 @@ class InMemoryRawStore:
         )
 
     def get(self, key: str) -> bytes:
-        return self._objects[key]
+        data = self._objects[key]
+        # H5: enforce read-time integrity — recompute the checksum and compare
+        # against the checksum recorded at write time. Detects silent corruption
+        # of the stored bytes.
+        expected = self._meta.get(key, (None, None))[0]
+        if expected is not None and _sha256(data) != expected:
+            raise RuntimeError(
+                f"Integrity check failed for {key}: stored bytes do not match "
+                f"recorded checksum"
+            )
+        return data
 
     def exists(self, key: str) -> bool:
         return key in self._objects

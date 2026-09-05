@@ -2,7 +2,7 @@
 name = "marine-data-engine"
 version = "0.1.0"
 description = "Source-agnostic Marine Data Layer backend (ingestion, canonical model, query-only API)."
-readme = "backend/README.md"
+readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
 authors = [{ name = "Marine Data Layer Team" }]
@@ -25,11 +25,18 @@ dependencies = [
     "structlog==24.4.0",
     "prometheus-client==0.21.1",
     "python-dateutil==2.9.0.post0",
+    "opentelemetry-api>=1.25.0",
+    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-exporter-otlp>=1.25.0",
+    "opentelemetry-instrumentation-fastapi>=0.46b0",
 ]
 
 [project.optional-dependencies]
 # Object storage (MinIO / S3). Kept optional so the API/tests can run without it.
 storage = ["boto3==1.35.90"]
+# MCP server SDK. Kept optional so the core engine/API/tests do not require it;
+# the dedicated `mcp` container installs `.[storage,mcp]`.
+mcp = ["mcp==1.29.1"]
 # Test + lint tooling.
 dev = [
     "pytest==8.3.4",
@@ -40,6 +47,7 @@ dev = [
 
 [project.scripts]
 marine-worker = "marine_data_engine.worker.runtime:main"
+marine-mcp = "marine_data_engine.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

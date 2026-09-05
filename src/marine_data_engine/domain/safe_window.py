@@ -123,8 +123,8 @@ def compute_safe_windows(
 
         classification = _classify_score(score)
         summary = {
-            "wave_height": wave,
-            "wind_speed": wind,
+            "wave_height_max": wave,
+            "wind_speed_max": wind,
             "warning_active": overlapping,
         }
         steps.append(TimeWindow(start, end, classification, score, summary))
@@ -140,14 +140,12 @@ def compute_safe_windows(
             # Summarize the worst conditions across the merged span.
             prev.conditions_summary = {
                 "wave_height_max": _max_opt(
-                    prev.conditions_summary.get("wave_height_max",
-                                                prev.conditions_summary.get("wave_height")),
-                    s.conditions_summary.get("wave_height"),
+                    prev.conditions_summary.get("wave_height_max"),
+                    s.conditions_summary.get("wave_height_max"),
                 ),
                 "wind_speed_max": _max_opt(
-                    prev.conditions_summary.get("wind_speed_max",
-                                                prev.conditions_summary.get("wind_speed")),
-                    s.conditions_summary.get("wind_speed"),
+                    prev.conditions_summary.get("wind_speed_max"),
+                    s.conditions_summary.get("wind_speed_max"),
                 ),
                 "warning_active": bool(
                     prev.conditions_summary.get("warning_active")

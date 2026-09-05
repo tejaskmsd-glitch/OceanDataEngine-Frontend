@@ -12,6 +12,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+import os
+
 
 class DatabaseSettings(BaseSettings):
     """PostgreSQL / PostGIS / TimescaleDB connection settings."""
@@ -31,9 +33,9 @@ class DatabaseSettings(BaseSettings):
     def url(self) -> str:
         if self.url_override:
             return self.url_override
-        # Also check the compose-standard DATABASE_URL env var.
-        import os
-
+        # Precedence: url_override (explicit DSN) > DATABASE_URL env var >
+        # discrete MDE_DB_* fields. This lets compose/managed services inject a
+        # single DSN while tests can pin an in-memory SQLite URL.
         db_url = os.environ.get("DATABASE_URL")
         if db_url:
             return db_url

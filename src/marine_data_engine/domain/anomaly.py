@@ -140,3 +140,113 @@ def compute_chlorophyll_anomaly(
         else:
             result.classification = "NORMAL"
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Multi-parameter synthesis (Marine Heatwave detection + combined impact)
+# --------------------------------------------------------------------------- #
+
+# Marine Heatwave categories by SST anomaly magnitude (deg C above baseline),
+# after Hobday et al. style banding (provisional; calibrate per region/season).
+_MHW_CATEGORIES: tuple[tuple[float, str], ...] = (
+    (4.0, "IV_EXTREME"),
+    (3.0, "III_SEVERE"),
+    (2.0, "II_STRONG"),
+    (1.0, "I_MODERATE"),
+)
+
+
+def _mhw_category(sst_anomaly: float) -> str | None:
+    """Return the MHW category label for a positive SST anomaly, else None."""
+    for threshold, label in _MHW_CATEGORIES:
+        if sst_anomaly >= threshold:
+            return label
+    return None
+
+
+@dataclass
+class AnomalyDetectionSummary:
+    """Aggregate multi-parameter anomaly synthesis.
+
+    Wraps per-parameter :class:`AnomalyResult` values and derives higher-level
+    findings — Marine Heatwave (MHW) category from the SST anomaly and a plain
+    list of human-readable drivers — plus an overall status.
+    """
+
+    anomalies: dict[str, AnomalyResult]
+    drivers: list[str]
+    mhw_detected: bool
+    mhw_category: str | None
+    status: str  # NORMAL | ANOMALY_DETECTED
+
+    def as_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "mhw_detected": self.mhw_detected,
+            "mhw_category": self.mhw_category,
+            "drivers": list(self.drivers),
+            "anomalies": {k: v.as_dict() for k, v in self.anomalies.items()},
+        }
+
+
+def detect_anomalies(
+    current_values: dict[str, float],
+    baselines: dict[str, float],
+    stds: dict[str, float] | None = None,
+) -> AnomalyDetectionSummary:
+    """Analyze multi-parameter departures against climatological baselines.
+
+    Detects extreme events such as Marine Heatwaves (MHW) and oligotrophic
+    chlorophyll depletion, synthesizing their combined impact on fisheries
+    productivity. Only parameters present in BOTH ``current_values`` and
+    ``baselines`` are evaluated; unknown parameters use the generic anomaly.
+    """
+    stds = stds or {}
+    anomalies: dict[str, AnomalyResult] = {}
+    drivers: list[str] = []
+    mhw_detected = False
+    mhw_category: str | None = None
+
+    for param, current in current_values.items():
+        if param not in baselines:
+            continue
+        baseline = baselines[param]
+        std = stds.get(param)
+
+        if param == "sst":
+            res = compute_sst_anomaly(current, baseline, std)
+            if res.anomaly > 0:
+                cat = _mhw_category(res.anomaly)
+                if cat is not None:
+                    mhw_detected = True
+                    mhw_category = cat
+                    drivers.append(
+                        f"Marine Heatwave (category {cat}): SST "
+                        f"{res.anomaly:+.2f} degC vs baseline"
+                    )
+            if res.classification not in ("NORMAL",):
+                drivers.append(f"SST {res.classification} ({res.anomaly:+.2f} degC)")
+        elif param in ("chlorophyll", "chlorophyll_a", "chl"):
+            res = compute_chlorophyll_anomaly(current, baseline, std)
+            if res.classification == "LOW":
+                drivers.append(
+                    "Oligotrophic depletion: chlorophyll below baseline "
+                    "(reduced productivity)"
+                )
+            elif res.classification not in ("NORMAL",):
+                drivers.append(f"Chlorophyll {res.classification} ({res.anomaly:+.4f})")
+        else:
+            res = compute_anomaly(current, baseline, std)
+            if res.classification not in ("NORMAL",):
+                drivers.append(f"{param} {res.classification} ({res.anomaly:+.4f})")
+
+        anomalies[param] = res
+
+    status = "ANOMALY_DETECTED" if drivers else "NORMAL"
+    return AnomalyDetectionSummary(
+        anomalies=anomalies,
+        drivers=drivers,
+        mhw_detected=mhw_detected,
+        mhw_category=mhw_category,
+        status=status,
+    )

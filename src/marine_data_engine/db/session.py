@@ -1,7 +1,14 @@
-"""Database engine and session management."""
+"""Database engine and session management.
+
+PostgreSQL only — no silent fallbacks. If the database is unreachable, callers
+get a clear exception. The MCP tool layer catches these and returns SOURCE_GAP
+responses so the server stays up, but no data is silently written to a throwaway
+store.
+"""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -13,29 +20,41 @@ from ..config import get_settings
 from . import models  # noqa: F401  (ensure models are registered on Base.metadata)
 from .base import Base
 
+logger = logging.getLogger(__name__)
+
 _engine: Engine | None = None
 _SessionFactory: sessionmaker[Session] | None = None
 
 
 def get_engine() -> Engine:
-    """Return the process-wide SQLAlchemy engine."""
+    """Return the process-wide SQLAlchemy engine (lazy, created once).
+
+    Uses ``pool_pre_ping`` so stale connections are recycled transparently.
+    If the database is unreachable at first use, the exception propagates —
+    callers (MCP tools, API endpoints) are responsible for catching it and
+    returning an appropriate error/degraded response.
+    """
     global _engine
-    if _engine is None:
-        url = get_settings().database.url
-        connect_args: dict = {}
-        if url.startswith("sqlite"):
-            connect_args["check_same_thread"] = False
-        # H17 fix: pool_pre_ping validates connections before use, preventing
-        # stale-connection errors after PostgreSQL timeouts/restarts.
-        extra: dict = {}
-        if not url.startswith("sqlite"):
-            extra = {
-                "pool_pre_ping": True,
-                "pool_size": 5,
-                "max_overflow": 10,
-                "pool_recycle": 1800,
-            }
-        _engine = create_engine(url, future=True, connect_args=connect_args, **extra)
+    if _engine is not None:
+        return _engine
+
+    url = get_settings().database.url
+    connect_args: dict = {}
+    if url.startswith("sqlite"):
+        # SQLite is only used in tests via MDE_DB_URL_OVERRIDE.
+        connect_args["check_same_thread"] = False
+
+    extra: dict = {}
+    if not url.startswith("sqlite"):
+        extra = {
+            "pool_pre_ping": True,
+            "pool_size": 5,
+            "max_overflow": 10,
+            "pool_recycle": 1800,
+        }
+
+    _engine = create_engine(url, future=True, connect_args=connect_args, **extra)
+    logger.info("Database engine created: %s", url.split("@")[-1] if "@" in url else url)
     return _engine
 
 

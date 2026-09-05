@@ -48,11 +48,10 @@ ENV WORKER_ROLE=process
 
 # Liveness: the worker runtime writes a heartbeat file; a healthy worker keeps
 # it fresh. Fallback to process presence check if the runtime is not yet built.
-HEALTHCHECK --interval=20s --timeout=5s --start-period=30s --retries=5 \
-    CMD test -f /tmp/worker_heartbeat && \
-        [ $(( $(date +%s) - $(stat -c %Y /tmp/worker_heartbeat) )) -lt 60 ] || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD test -f /tmp/worker_heartbeat && find /tmp/worker_heartbeat -mmin -2 | grep -q . || exit 1
 
 # Entry point is the console script defined in pyproject:
 #   marine-worker = "marine_data_engine.worker.runtime:main"
 # The runtime reads WORKER_ROLE to select queue/subject bindings.
-CMD ["sh", "-c", "marine-worker --role ${WORKER_ROLE:-process}"]
+CMD ["sh", "-c", "opentelemetry-instrument marine-worker --role ${WORKER_ROLE:-process}"]

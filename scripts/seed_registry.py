@@ -30,6 +30,25 @@ import sys
 from typing import Any
 
 
+# Map numeric priority strings from the legacy fixture to the documented
+# canonical enum values.
+_PRIORITY_MAP = {
+    "0": "critical_alerts",
+    "1": "realtime_observations",
+    "2": "normal_ingestion",
+    "3": "scientific",
+    "4": "backfill_archive",
+}
+
+
+def map_priority(value: Any) -> str:
+    """Translate a fixture priority into the canonical enum value.
+
+    Falls back to ``normal_ingestion`` for unknown/missing values.
+    """
+    return _PRIORITY_MAP.get(str(value).strip(), "normal_ingestion")
+
+
 def parse_update_interval(value: Any) -> int | None:
     """Extract an explicit polling interval and return seconds."""
     if not value:
@@ -254,7 +273,7 @@ def main() -> int:
                 if parameters is not None:
                     parameters = json.dumps(parameters)
 
-                priority = str(row.get("priority", 100))
+                priority = map_priority(row.get("priority", 2))
 
                 status = str(
                     row.get("status", "DISABLED")

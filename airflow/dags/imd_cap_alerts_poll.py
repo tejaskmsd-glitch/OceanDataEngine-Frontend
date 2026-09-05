@@ -22,15 +22,22 @@ RSS_INDEX = "https://cap-sources.s3.amazonaws.com/in-imd-en/rss.xml"
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
+    concurrency=2,
+    dagrun_timeout=pendulum.duration(minutes=10),
     tags=["marine", "imd", "alerts", "P0"],
-    default_args={"retries": 3, "retry_delay": pendulum.duration(seconds=15)},
+    default_args={
+        "retries": 3, 
+        "retry_delay": pendulum.duration(seconds=15),
+        "execution_timeout": pendulum.duration(minutes=5),
+    },
 )
 def imd_cap_alerts_poll():
     @task(task_id="trigger_cap_ingest")
     def trigger() -> None:
         publish_ingest_trigger(
-            subject="ingest.imd_cap",
+            subject="MARINE.work.critical_alerts",
             payload={
+                "type": "ingest.imd_cap",
                 "connector": "imd_cap_alerts",
                 "provider": "IMD",
                 "rss_index": RSS_INDEX,

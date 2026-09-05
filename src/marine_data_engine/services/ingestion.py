@@ -134,54 +134,83 @@ class IngestionService:
 
         dataset = self._ensure_dataset(raw.provider, raw.dataset)
 
-        ingestion_job = IngestionJob(
-            job_uid=uuid.uuid4().hex,
-            dataset_key=dataset.key,
-            priority=QueuePriority.NORMAL_INGESTION.value,
-            status=JobStatus.RUNNING.value,
-            idempotency_key=stored.checksum_sha256,
-            started_at=_now(),
-            bytes_fetched=stored.size_bytes,
-        )
-        self.session.add(ingestion_job)
-        self.session.flush()
-
-        self.session.add(
-            DatasetAsset(
-                dataset_id=dataset.id,
-                role="raw",
-                storage_uri=stored.uri,
-                media_type=stored.media_type,
-                checksum_sha256=stored.checksum_sha256,
-                size_bytes=stored.size_bytes,
-                ingestion_job_id=ingestion_job.id,
-                retrieved_at=stored.retrieved_at,
+        # Idempotency: re-ingesting the same raw payload (same checksum) must not
+        # create duplicate lineage rows or violate unique constraints. Reuse the
+        # existing job/asset/run when the checksum has been seen before.
+        ingestion_job = self.session.execute(
+            select(IngestionJob).where(
+                IngestionJob.idempotency_key == stored.checksum_sha256
             )
-        )
+        ).scalar_one_or_none()
+        if ingestion_job is None:
+            ingestion_job = IngestionJob(
+                job_uid=uuid.uuid4().hex,
+                dataset_key=dataset.key,
+                priority=QueuePriority.NORMAL_INGESTION.value,
+                status=JobStatus.RUNNING.value,
+                idempotency_key=stored.checksum_sha256,
+                started_at=_now(),
+                bytes_fetched=stored.size_bytes,
+            )
+            self.session.add(ingestion_job)
+            self.session.flush()
 
-        proc_job = ProcessingJob(
-            job_uid=uuid.uuid4().hex,
-            dataset_key=dataset.key,
-            job_type=f"normalize_{raw.dataset}",
-            priority=QueuePriority.NORMAL_INGESTION.value,
-            status=JobStatus.RUNNING.value,
-            idempotency_key=stored.checksum_sha256,
-            ingestion_job_id=ingestion_job.id,
-            started_at=_now(),
-        )
-        self.session.add(proc_job)
-        self.session.flush()
+        existing_asset = self.session.execute(
+            select(DatasetAsset).where(
+                DatasetAsset.dataset_id == dataset.id,
+                DatasetAsset.storage_uri == stored.uri,
+            )
+        ).scalar_one_or_none()
+        if existing_asset is None:
+            self.session.add(
+                DatasetAsset(
+                    dataset_id=dataset.id,
+                    role="raw",
+                    storage_uri=stored.uri,
+                    media_type=stored.media_type,
+                    checksum_sha256=stored.checksum_sha256,
+                    size_bytes=stored.size_bytes,
+                    ingestion_job_id=ingestion_job.id,
+                    retrieved_at=stored.retrieved_at,
+                )
+            )
+            self.session.flush()
 
-        run = ProcessingRun(
-            run_uid=uuid.uuid4().hex,
-            processing_job_id=proc_job.id,
-            attempt=1,
-            status=JobStatus.RUNNING.value,
-            worker="ingestion-service",
-            started_at=_now(),
-        )
-        self.session.add(run)
-        self.session.flush()
+        proc_job = self.session.execute(
+            select(ProcessingJob).where(
+                ProcessingJob.idempotency_key == stored.checksum_sha256
+            )
+        ).scalar_one_or_none()
+        if proc_job is None:
+            proc_job = ProcessingJob(
+                job_uid=uuid.uuid4().hex,
+                dataset_key=dataset.key,
+                job_type=f"normalize_{raw.dataset}",
+                priority=QueuePriority.NORMAL_INGESTION.value,
+                status=JobStatus.RUNNING.value,
+                idempotency_key=stored.checksum_sha256,
+                ingestion_job_id=ingestion_job.id,
+                started_at=_now(),
+            )
+            self.session.add(proc_job)
+            self.session.flush()
+
+        run = self.session.execute(
+            select(ProcessingRun).where(
+                ProcessingRun.processing_job_id == proc_job.id
+            )
+        ).scalars().first()
+        if run is None:
+            run = ProcessingRun(
+                run_uid=uuid.uuid4().hex,
+                processing_job_id=proc_job.id,
+                attempt=1,
+                status=JobStatus.RUNNING.value,
+                worker="ingestion-service",
+                started_at=_now(),
+            )
+            self.session.add(run)
+            self.session.flush()
 
         summary = IngestSummary(dataset_key=dataset.key, raw_uri=stored.uri)
 
@@ -290,7 +319,14 @@ class IngestionService:
         run.records_quarantined = summary.quarantined
         run.status = JobStatus.SUCCEEDED.value
         run.finished_at = _now()
-        run.duration_ms = int((run.finished_at - run.started_at).total_seconds() * 1000)
+        # ``started_at`` may come back timezone-naive from the DB when this run
+        # is reused on a repeat (idempotent) ingest; normalize to UTC before the
+        # subtraction to avoid mixing naive/aware datetimes.
+        _started = run.started_at
+        if _started is not None and _started.tzinfo is None:
+            _started = _started.replace(tzinfo=UTC)
+        run.duration_ms = int((run.finished_at - _started).total_seconds() * 1000) \
+            if _started is not None else 0
 
         proc_job.status = JobStatus.SUCCEEDED.value
         proc_job.finished_at = _now()
@@ -645,12 +681,18 @@ class IngestionService:
             summary.skipped_duplicates += 1
             return
 
+        # A forecast's ``valid_from`` is legitimately in the future, so the
+        # observation "no future timestamps" temporal check must NOT be applied
+        # to it (that would reject every genuine NWP forecast as "in the
+        # future"). Use the forecast's production/issue time (``forecast_time``
+        # / model cycle) as the temporal reference instead — that is at or
+        # before "now". Range/spatial/schema checks still apply to the value.
         qc = qc_observation(
             parameter=forecast.parameter,
             value=forecast.value,
             latitude=forecast.latitude,
             longitude=forecast.longitude,
-            observed_at=forecast.valid_from,
+            observed_at=forecast.forecast_time,
         )
 
         row = Forecast(

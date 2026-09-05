@@ -26,12 +26,20 @@ def publish_ingest_trigger(subject: str, payload: dict[str, Any]) -> None:
         import asyncio
 
         import nats  # type: ignore
+        import nats.errors # type: ignore
 
         async def _send() -> None:
-            nc = await nats.connect(nats_url)
+            nc = await nats.connect(nats_url, connect_timeout=5)
             try:
                 js = nc.jetstream()
-                await js.publish(subject, body)
+                for attempt in range(3):
+                    try:
+                        await js.publish(subject, body, timeout=5)
+                        break
+                    except nats.errors.TimeoutError:
+                        if attempt == 2:
+                            raise
+                        await asyncio.sleep(2 ** attempt)
             finally:
                 await nc.drain()
 

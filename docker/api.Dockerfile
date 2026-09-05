@@ -60,4 +60,4 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
     CMD curl -fsS "http://localhost:${API_PORT:-8000}/v1/health" || exit 1
 
 # uvicorn serves the ASGI app; module path is overridable via API_APP_MODULE.
-CMD ["sh", "-c", "uvicorn ${API_APP_MODULE:-marine_data_engine.api.app:app} --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8000} --workers ${API_WORKERS:-2}"]
+CMD ["sh", "-c", "opentelemetry-instrument uvicorn ${API_APP_MODULE:-marine_data_engine.api.app:app} --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8000} --workers ${API_WORKERS:-2}"]

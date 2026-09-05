@@ -21,7 +21,15 @@ import type {
   ResponseEnvelope,
 } from '../types/api';
 
-const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim();
+declare global {
+  interface Window {
+    __RUNTIME_CONFIG__?: {
+      API_BASE_URL?: string;
+    };
+  }
+}
+
+const RAW_BASE = (window.__RUNTIME_CONFIG__?.API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? '').trim();
 /** Normalized base URL without a trailing slash. Empty means same-origin. */
 export const API_BASE_URL = RAW_BASE.replace(/\/$/, '');
 

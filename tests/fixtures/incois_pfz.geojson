@@ -10,7 +10,7 @@
         "advisory_type": "general",
         "issue_time": "2026-09-03T04:30:00+00:00",
         "valid_from": "2026-09-03T00:00:00+00:00",
-        "valid_until": "2026-09-05T00:00:00+00:00",
+        "valid_until": "2026-09-15T00:00:00+00:00",
         "sst_context": 28.4,
         "chlorophyll_context": 0.62,
         "confidence": 0.8
@@ -37,7 +37,7 @@
         "advisory_type": "general",
         "issue_time": "2026-09-03T04:30:00+00:00",
         "valid_from": "2026-09-03T00:00:00+00:00",
-        "valid_until": "2026-09-05T00:00:00+00:00",
+        "valid_until": "2026-09-15T00:00:00+00:00",
         "sst_context": 29.1,
         "chlorophyll_context": 0.51,
         "confidence": 0.7

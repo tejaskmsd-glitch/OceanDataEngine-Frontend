@@ -19,11 +19,11 @@ It stands up the Phase-0 substrate described in `prompt.md` §32 and
 | Service | Purpose | Host port |
 |---|---|---|
 | `postgres` | PostgreSQL **+ PostGIS + TimescaleDB** (canonical + time-series) | 5432 |
-| `minio` | S3-compatible object store (raw immutable + processed) | 9000 / 9001 |
+| `minio` | S3-compatible object store (raw immutable + processed) | 19000 / 19001 |
 | `minio-init` | one-shot: creates `marine-raw`, `marine-processed`, `marine-artifacts` | — |
 | `redis` | cache / rate-limit / light broker | 6379 |
-| `nats` | **NATS JetStream** work queues + live alert events | 4222 / 8222 |
-| `otel-collector` | OpenTelemetry traces/metrics fan-in | 4317 / 4318 / 8889 |
+| `nats` | **NATS JetStream** work queues + live alert events | 14222 / 18222 |
+| `otel-collector` | OpenTelemetry traces/metrics fan-in | 14317 / 14318 / 18889 |
 | `api` | FastAPI application (query-only) | 8000 |
 | `worker-ingest` | source fetch → raw object store | — |
 | `worker-process` | decode / normalize / QC / derived products (heavy) | — |
@@ -31,8 +31,8 @@ It stands up the Phase-0 substrate described in `prompt.md` §32 and
 | `airflow-init` | one-shot Airflow DB migrate + admin user | — |
 | `airflow-scheduler` | source DAG scheduling (LocalExecutor) | — |
 | `airflow-webserver` | Airflow UI | 8080 |
-| `prometheus` | metrics scraping | 9090 |
-| `grafana` | dashboards (provisioned) | 3000 |
+| `prometheus` | metrics scraping | 19090 |
+| `grafana` | dashboards (provisioned) | 13000 |
 | `dashboard` | React ops dashboard (static via nginx) | 5173 |
 
 Every long-running service declares a healthcheck and dependency ordering.
@@ -62,10 +62,10 @@ make bootstrap
 ```
 API:        http://localhost:8000        (OpenAPI docs at /docs)
 Dashboard:  http://localhost:5173
-Grafana:    http://localhost:3000        (user/pass from .env)
+Grafana:    http://localhost:13000       (user/pass from .env)
 Airflow:    http://localhost:8080        (user/pass from .env)
-Prometheus: http://localhost:9090
-MinIO:      http://localhost:9001        (console; user/pass from .env)
+Prometheus: http://localhost:19090
+MinIO:      http://localhost:19001       (console; user/pass from .env)
 ```
 
 ### Step-by-step (equivalent to bootstrap)
@@ -98,11 +98,12 @@ make nuke                # DESTRUCTIVE: down + delete all volumes
 Migrations create the **canonical marine schema** (requirements §7, §17;
 source_mapping §7): dataset registry, processing jobs, `observation` /
 `forecast` (TimescaleDB hypertables), `warning` / `cyclone` / `tsunami_event`,
-`pfz`, `fishery_advisory`, `station`, `zone` (geofence), `bathymetry`,
+`pfz`, `fishery_advisory`, `station`, `zone` (geofence), `bathymetry` (table planned, currently pending source data),
 `evidence`, and `dataset_freshness`.
 
-- Geometry columns use **SRID 4326 (WGS84)**.
+- Geometry columns currently use **TEXT (GeoJSON)** (native PostGIS integration is in progress).
 - Hypertable creation is guarded, so migrations also succeed on a PostGIS-only DB.
+- **TimescaleDB requirement**: Hypertables (e.g. `observation`, `forecast`) use a composite primary key (`id`, `[time_column]`) because the partition column must be part of any unique/primary index.
 - Migrations are **explicit SQL** and do **not** import backend SQLAlchemy models
   — they coordinate with the backend by matching the documented canonical fields.
   If the backend later manages its own metadata, run migrations against the

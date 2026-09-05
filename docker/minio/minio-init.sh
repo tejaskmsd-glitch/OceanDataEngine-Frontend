@@ -32,6 +32,6 @@ create_bucket "${S3_BUCKET_ARTIFACTS:-marine-artifacts}"
 # require object-lock at bucket creation; versioning gives immutable history
 # for the local dev tier and prevents silent overwrites of raw files).
 echo "[minio-init] enabling versioning on ${S3_BUCKET_RAW:-marine-raw}"
-mc version enable "${MC_ALIAS}/${S3_BUCKET_RAW:-marine-raw}" || true
+mc version enable "${MC_ALIAS}/${S3_BUCKET_RAW:-marine-raw}"
 
 echo "[minio-init] done."

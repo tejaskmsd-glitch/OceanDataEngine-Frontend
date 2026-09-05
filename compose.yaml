@@ -37,7 +37,7 @@ x-common-env: &common-env
   MDE_NATS_SERVERS: ${NATS_URL}
   MDE_ENABLE_LIVE_SOURCES: "false"
   MDE_LOG_JSON: "true"
-  REDIS_URL: ${REDIS_URL}
+  # REDIS_URL reserved for future use if needed
   NATS_URL: ${NATS_URL}
   NATS_JETSTREAM_ENABLED: ${NATS_JETSTREAM_ENABLED:-true}
   S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
@@ -74,7 +74,7 @@ services:
       - pgdata:/home/postgres/pgdata/data
       - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -95,8 +95,8 @@ services:
     volumes:
       - miniodata:/data
     ports:
-      - "19000:9000"   # S3 API
-      - "19001:9001"   # console
+      - "127.0.0.1:19000:9000"   # S3 API
+      - "127.0.0.1:19001:9001"   # console
     healthcheck:
       test: ["CMD-SHELL", "mc ready local || curl -fsS http://localhost:9000/minio/health/live || exit 1"]
       interval: 10s
@@ -121,23 +121,6 @@ services:
       - ./docker/minio/minio-init.sh:/scripts/minio-init.sh:ro
     restart: "no"
 
-  # ---------------------------------------------------------------------------
-  # Redis
-  # ---------------------------------------------------------------------------
-  redis:
-    image: redis:7.4.1-bookworm
-    <<: *restart-policy
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redisdata:/data
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
 
   # ---------------------------------------------------------------------------
   # NATS with JetStream enabled (-js) for durable work queues + live events
@@ -149,8 +132,8 @@ services:
     volumes:
       - natsdata:/data
     ports:
-      - "14222:4222"   # client
-      - "18222:8222"   # monitoring / health
+      - "127.0.0.1:14222:4222"   # client
+      - "127.0.0.1:18222:8222"   # monitoring / health
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:8222/healthz || exit 1"]
       interval: 10s
@@ -168,9 +151,9 @@ services:
     volumes:
       - ./observability/otel/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
     ports:
-      - "14317:4317"   # OTLP gRPC
-      - "14318:4318"   # OTLP HTTP
-      - "18889:8889"   # Prometheus exporter (collector metrics)
+      - "127.0.0.1:14317:4317"   # OTLP gRPC
+      - "127.0.0.1:14318:4318"   # OTLP HTTP
+      - "127.0.0.1:18889:8889"   # Prometheus exporter (collector metrics)
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:13133/ || exit 1"]
       interval: 15s
@@ -200,8 +183,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
       nats:
         condition: service_healthy
       minio-init:
@@ -214,8 +195,43 @@ services:
       start_period: 40s
 
   # ---------------------------------------------------------------------------
-  # Workers — separated roles / queues, independently scalable
+  # MCP server — exposes the Marine Data Engine to AI/agent clients over
+  # Streamable HTTP (POST /mcp). First-class stack service: `docker compose up`
+  # starts it automatically alongside the API and workers (no manual start).
   # ---------------------------------------------------------------------------
+  mcp:
+    build:
+      context: .
+      dockerfile: docker/mcp.Dockerfile
+    <<: *restart-policy
+    environment:
+      <<: *common-env
+      MCP_HOST: ${MCP_HOST:-0.0.0.0}
+      MCP_PORT: ${MCP_PORT:-9100}
+      MCP_TRANSPORT: ${MCP_TRANSPORT:-streamable-http}
+      OTEL_SERVICE_NAME: marine-mcp
+    volumes:
+      - ./src:/app/src:ro
+    ports:
+      - "${MCP_PORT:-9100}:9100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS -o /dev/null "http://localhost:${MCP_PORT:-9100}/mcp"
+          || curl -s -o /dev/null -w "%{http_code}" "http://localhost:${MCP_PORT:-9100}/mcp" | grep -qE '^[1-5][0-9][0-9]$$'
+          || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
   worker-ingest:
     build:
       context: .
@@ -381,7 +397,7 @@ services:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - promdata:/prometheus
     ports:
-      - "19090:9090"
+      - "127.0.0.1:19090:9090"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:9090/-/healthy || exit 1"]
       interval: 15s
@@ -439,7 +455,6 @@ services:
 volumes:
   pgdata:
   miniodata:
-  redisdata:
   natsdata:
   promdata:
   grafanadata:

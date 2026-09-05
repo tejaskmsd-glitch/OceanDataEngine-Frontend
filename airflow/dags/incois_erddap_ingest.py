@@ -43,15 +43,22 @@ ERDDAP_DATASET_IDS = [
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
+    concurrency=4,
+    dagrun_timeout=pendulum.duration(minutes=30),
     tags=["marine", "incois", "erddap", "P0"],
-    default_args={"retries": 3, "retry_delay": pendulum.duration(minutes=2)},
+    default_args={
+        "retries": 3, 
+        "retry_delay": pendulum.duration(minutes=2),
+        "execution_timeout": pendulum.duration(minutes=10),
+    },
 )
 def incois_erddap_ingest():
     @task(task_id="trigger_erddap_ingest")
     def trigger(dataset_id: str) -> None:
         publish_ingest_trigger(
-            subject="ingest.incois_erddap",
+            subject="MARINE.work.scientific",
             payload={
+                "type": "ingest.incois_erddap",
                 "connector": "incois_erddap",
                 "provider": "INCOIS",
                 "erddap_base": ERDDAP_BASE,

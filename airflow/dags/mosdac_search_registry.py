@@ -22,15 +22,22 @@ MOSDAC_SEARCH = "https://mosdac.gov.in/apios/datasets.json"
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
+    concurrency=2,
+    dagrun_timeout=pendulum.duration(minutes=15),
     tags=["marine", "mosdac", "registry", "P0-support"],
-    default_args={"retries": 3, "retry_delay": pendulum.duration(minutes=2)},
+    default_args={
+        "retries": 3, 
+        "retry_delay": pendulum.duration(minutes=2),
+        "execution_timeout": pendulum.duration(minutes=5),
+    },
 )
 def mosdac_search_registry():
     @task(task_id="trigger_mosdac_search")
     def trigger() -> None:
         publish_ingest_trigger(
-            subject="ingest.mosdac_search",
+            subject="MARINE.work.scientific",
             payload={
+                "type": "ingest.mosdac_search",
                 "connector": "mosdac_search",
                 "provider": "MOSDAC",
                 "search_url": MOSDAC_SEARCH,
