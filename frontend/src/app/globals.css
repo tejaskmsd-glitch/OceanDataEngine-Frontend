@@ -1,0 +1,254 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --background: #08090a;
+  --foreground: #ffffff;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+/* Custom ocean utilities - Clean flat dark styling */
+.ocean-gradient-hero {
+  background: #08090a;
+}
+
+.ocean-gradient-radial {
+  background: transparent;
+}
+
+.ocean-panel {
+  background: #111214;
+  border: 1px solid #202124;
+}
+
+.ocean-panel-subtle {
+  background: #0d0e10;
+  border: 1px solid #1a1b1d;
+}
+
+.ocean-panel-hover:hover {
+  background: #16171a;
+  border-color: #2c2d31;
+}
+
+/* Very subtle underwater caustic light animation */
+@keyframes waterCaustics {
+  0% {
+    opacity: 0.15;
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    opacity: 0.25;
+    transform: translateY(-8px) scale(1.02);
+  }
+  100% {
+    opacity: 0.15;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-water-caustics {
+  animation: waterCaustics 12s ease-in-out infinite;
+}
+
+/* Very calm suspended particle floating */
+@keyframes marineDriftSlow {
+  0% {
+    transform: translateY(0px) translateX(0px);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translateY(-25px) translateX(12px);
+    opacity: 0.4;
+  }
+  100% {
+    transform: translateY(0px) translateX(0px);
+    opacity: 0.2;
+  }
+}
+
+@keyframes marineDriftFast {
+  0% {
+    transform: translateY(0px) translateX(0px);
+    opacity: 0.1;
+  }
+  50% {
+    transform: translateY(-40px) translateX(-15px);
+    opacity: 0.3;
+  }
+  100% {
+    transform: translateY(0px) translateX(0px);
+    opacity: 0.1;
+  }
+}
+
+.particle-drift-1 {
+  animation: marineDriftSlow 18s ease-in-out infinite;
+}
+
+.particle-drift-2 {
+  animation: marineDriftFast 24s ease-in-out infinite;
+}
+
+/* Subtle marine creature slow glide in deep background */
+@keyframes whaleGlide {
+  0% {
+    transform: translateX(-120%) translateY(0) scale(0.7);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.18;
+  }
+  85% {
+    opacity: 0.18;
+  }
+  100% {
+    transform: translateX(250%) translateY(-20px) scale(0.7);
+    opacity: 0;
+  }
+}
+
+@keyframes turtleGlide {
+  0% {
+    transform: translateX(180%) translateY(0) scale(0.5);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.14;
+  }
+  80% {
+    opacity: 0.14;
+  }
+  100% {
+    transform: translateX(-150%) translateY(30px) scale(0.5);
+    opacity: 0;
+  }
+}
+
+.animate-whale-glide {
+  animation: whaleGlide 80s linear infinite;
+}
+
+.animate-turtle-glide {
+  animation: turtleGlide 65s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-water-caustics,
+  .particle-drift-1,
+  .particle-drift-2,
+  .animate-whale-glide,
+  .animate-turtle-glide {
+    animation: none !important;
+  }
+}
+
+/* Custom scrollbar for dark ocean theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #030710;
+}
+::-webkit-scrollbar-thumb {
+  background: #112236;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #1a3658;
+}
+
+/* Leaflet dark theme map overrides */
+.leaflet-container {
+  background-color: #040914 !important;
+  font-family: inherit !important;
+}
+
+.leaflet-bar {
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: none !important;
+  border-radius: 6px !important;
+  overflow: hidden;
+}
+
+.leaflet-bar a {
+  background-color: rgba(9, 21, 37, 0.85) !important;
+  color: #c9d6df !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: #122845 !important;
+  color: #ffffff !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: rgba(6, 16, 30, 0.95) !important;
+  color: #e2e8f0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(12px) !important;
+}
+
+.leaflet-popup-tip {
+  background: rgba(6, 16, 30, 0.95) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+
+/* Deep, restrained scientific ocean basemap styling (25-30% brighter land/ocean contrast) */
+.ocean-tile-layer img {
+  filter: brightness(0.86) contrast(1.15) sepia(0.22) hue-rotate(188deg) saturate(1.8);
+}
+
+/* Crisp, high-contrast geographic reference labels (countries, cities, seas, islands) */
+.ocean-reference-layer img {
+  filter: brightness(1.2) contrast(1.15);
+}
+
+/* Oceanographic probe marker */
+.custom-probe-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+@keyframes sonarPing {
+  0% {
+    transform: scale(0.65);
+    opacity: 0.9;
+  }
+  70%, 100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+/* Restrained, discreet Leaflet attribution */
+.leaflet-control-attribution {
+  background: rgba(2, 7, 16, 0.75) !important;
+  color: #64748b !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  border-top-left-radius: 6px;
+  backdrop-filter: blur(6px);
+  padding: 2px 8px !important;
+}
+
+.leaflet-control-attribution a {
+  color: #94a3b8 !important;
+  text-decoration: none !important;
+}
+
+.leaflet-control-attribution a:hover {
+  text-decoration: underline !important;
+}
