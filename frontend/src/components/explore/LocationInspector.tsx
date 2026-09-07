@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Activity,
   Wind,
@@ -13,6 +14,7 @@ import {
   Info,
   Calendar,
   Compass,
+  FileText,
 } from "lucide-react";
 import type {
   Envelope,
@@ -236,20 +238,31 @@ export function LocationInspector({
           </div>
         </div>
 
-        {onToggleExpand && (
-          <button
-            type="button"
-            onClick={onToggleExpand}
-            className="p-1.5 rounded hover:bg-[#16171a] text-[#8e8e93] hover:text-white transition-colors border border-transparent hover:border-[#202124]"
-            title={isExpanded ? "Collapse Panel" : "Expand Panel"}
+        <div className="flex items-center space-x-1.5">
+          <Link
+            href={`/report?lat=${location.lat}&lon=${location.lon}&radius=${radiusKm}&tab=${activeTab}`}
+            className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded bg-[#111214] hover:bg-[#181a1f] border border-[#202124] hover:border-[#7FCBC5]/50 text-[11px] text-[#BDCDC9] hover:text-white transition-all font-sans"
+            title="Generate comprehensive Visual Data Report"
           >
-            {isExpanded ? (
-              <Minimize2 className="w-4 h-4" />
-            ) : (
-              <Maximize2 className="w-4 h-4" />
-            )}
-          </button>
-        )}
+            <FileText className="w-3 h-3 text-[#7FCBC5]" />
+            <span className="hidden sm:inline">Visual Report</span>
+          </Link>
+
+          {onToggleExpand && (
+            <button
+              type="button"
+              onClick={onToggleExpand}
+              className="p-1.5 rounded hover:bg-[#16171a] text-[#8e8e93] hover:text-white transition-colors border border-transparent hover:border-[#202124]"
+              title={isExpanded ? "Collapse Panel" : "Expand Panel"}
+            >
+              {isExpanded ? (
+                <Minimize2 className="w-4 h-4" />
+              ) : (
+                <Maximize2 className="w-4 h-4" />
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabs navigation */}
